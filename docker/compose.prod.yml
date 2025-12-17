@@ -1,0 +1,85 @@
+name: polyglot-lab-prod
+
+networks:
+  polyglot-net:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+
+services:
+  golang-gin-app:
+    # In real prod, this would be a registry image, e.g.:
+    # image: ghcr.io/your-username/golang-gin-app:1.0.0
+    image: golang-gin-app:1.0.0
+    container_name: golang-gin-app
+    env_file:
+      - ../golang-gin/.env.prod
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
+    networks:
+      - polyglot-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "256M"
+
+  java-springboot-app:
+    # image: ghcr.io/your-username/java-springboot-app:1.0.0
+    image: java-springboot-app:1.0.0
+    container_name: java-springboot-app
+    env_file:
+      - ../java-springboot/.env.prod
+    ports:
+      - "8082:8080"
+    restart: unless-stopped
+    networks:
+      - polyglot-net
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: "1024M"
+
+  python-django-app:
+    # image: ghcr.io/your-username/python-django-app:1.0.0
+    image: python-django-app:1.0.0
+    container_name: python-django-app
+    env_file:
+      - ../python-django/.env.prod
+    ports:
+      - "8083:8080"
+    restart: unless-stopped
+    networks:
+      - polyglot-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: "512M"
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    networks:
+      - polyglot-net
+    depends_on:
+      golang-gin-app:
+        condition: service_healthy
+      java-springboot-app:
+        condition: service_healthy
+      python-django-app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

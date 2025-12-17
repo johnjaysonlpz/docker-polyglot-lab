@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "golang-gin-app"
+    static_configs:
+      - targets: ["golang-gin-app:8080"]
+
+  - job_name: "java-springboot-app"
+    static_configs:
+      - targets: ["java-springboot-app:8080"]
+
+  - job_name: "python-django-app"
+    static_configs:
+      - targets: ["python-django-app:8080"]
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["prometheus:9090"]

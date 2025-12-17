@@ -1,0 +1,108 @@
+name: polyglot-lab-int
+
+networks:
+  polyglot-net:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+
+services:
+  golang-gin-app:
+    image: golang-gin-app:1.0.0
+    pull_policy: never
+    build:
+      context: ../golang-gin
+      dockerfile: Dockerfile
+      args:
+        RUN_TESTS: "true"
+        SERVICE_NAME: "golang-gin-app"
+        VERSION: "1.0.0"
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    container_name: golang-gin-app
+    env_file:
+      - ../golang-gin/.env.int
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
+    networks:
+      - polyglot-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "256M"
+
+  java-springboot-app:
+    image: java-springboot-app:1.0.0
+    pull_policy: never
+    build:
+      context: ../java-springboot
+      dockerfile: Dockerfile
+      args:
+        RUN_TESTS: "true"
+        SERVICE_NAME: "java-springboot-app"
+        VERSION: "1.0.0"
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    container_name: java-springboot-app
+    env_file:
+      - ../java-springboot/.env.int
+    ports:
+      - "8082:8080"
+    restart: unless-stopped
+    networks:
+      - polyglot-net
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: "1024M"
+
+  python-django-app:
+    image: python-django-app:1.0.0
+    pull_policy: never
+    build:
+      context: ../python-django
+      dockerfile: Dockerfile
+      args:
+        RUN_TESTS: "true"
+        SERVICE_NAME: "python-django-app"
+        VERSION: "1.0.0"
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    container_name: python-django-app
+    env_file:
+      - ../python-django/.env.int
+    ports:
+      - "8083:8080"
+    restart: unless-stopped
+    networks:
+      - polyglot-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: "512M"
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    networks:
+      - polyglot-net
+    depends_on:
+      golang-gin-app:
+        condition: service_healthy
+      java-springboot-app:
+        condition: service_healthy
+      python-django-app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
