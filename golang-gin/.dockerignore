@@ -1,0 +1,28 @@
+# VCS
+.git
+.gitignore
+
+# IDE / editor
+.vscode
+.idea
+*.code-workspace
+*.swp
+*.swo
+
+# Build artifacts / test outputs
+bin/
+dist/
+tmp/
+*.out
+*.test
+coverage*.out
+
+# Logs
+*.log
+
+# Dependencies (only if you don't use go mod vendor in the image)
+vendor/
+
+# OS junk
+.DS_Store
+Thumbs.db
