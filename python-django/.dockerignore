@@ -1,0 +1,48 @@
+# VCS
+.git
+.gitignore
+
+# Python cache / bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtualenvs
+venv/
+.venv/
+env/
+env*/
+.venv*/
+pip-wheel-metadata/
+
+# Test / coverage / type checking
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+
+# Logs
+*.log
+
+# Local SQLite DB (for dev only)
+*.sqlite3
+
+# Static/media output (if generated locally)
+staticfiles/
+# static/  # uncomment only if project/static is not source
+media/
+
+# IDE / editor
+.vscode
+.idea
+*.code-workspace
+
+# OS junk
+.DS_Store
+Thumbs.db
