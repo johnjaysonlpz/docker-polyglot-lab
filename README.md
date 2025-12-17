@@ -19,7 +19,7 @@ All three expose the same basic HTTP API:
 - `/ready`  – readiness probe
 - `/metrics` – Prometheus metrics (text format)
 
-Everything is wired to run **locally with Docker**, and in **dev / integration / prod-like** Compose environments with **Prometheus** scraping all services.
+Everything is wired to run **locally with Docker**, and in **dev / integration / prod-like** Compose environments with **Prometheus** scraping all services and **Grafana** available for dashboards.
 
 The goal of this repo is to showcase:
 
@@ -27,6 +27,7 @@ The goal of this repo is to showcase:
 - Environment-specific Docker Compose (dev / int / prod)
 - Structured JSON logging (slog / Logback / python-json-logger)
 - Prometheus metrics across Go, Java, and Python
+- Grafana wired to Prometheus for visualization
 - Config driven by env vars with validation
 - Tests integrated into Docker builds (for int)
 
@@ -71,13 +72,13 @@ See: [`python-django/README.md`](./python-django/README.md)
 
 ---
 
-### 4. Docker / Compose / Prometheus – `docker/`
+### 4. Docker / Compose / Prometheus / Grafana – `docker/`
 
 This directory contains:
 
 - `compose.dev.yml` – dev: three services only
-- `compose.int.yml` – integration: three services + Prometheus, builds with tests
-- `compose.prod.yml` – prod-like: three pre-built images + Prometheus
+- `compose.int.yml` – integration: three services + Prometheus + Grafana, builds with tests
+- `compose.prod.yml` – prod-like: three pre-built images + Prometheus + Grafana
 - `prometheus/prometheus.yml` – scrape config for all services
 
 All Compose files use a shared network:
@@ -87,6 +88,9 @@ All Compose files use a shared network:
   - `java-springboot-app`
   - `python-django-app`
   - `prometheus`
+  - `grafana`
+
+Grafana is pre-wired to use Prometheus as its primary datasource.
 
 See: [`docker/README.md`](./docker/README.md)
 
@@ -152,6 +156,7 @@ Endpoints:
 - Spring Boot: `http://localhost:8082`
 - Django: `http://localhost:8083`
 - Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000`
 
 Example Prometheus query:
 
@@ -159,7 +164,9 @@ Example Prometheus query:
 - `http_request_duration_seconds_bucket`
 - `build_info`
 
-Stop (keeps Prometheus data volume):
+In Grafana, you can add dashboards using the Prometheus datasource that is already configured in the Compose stack.
+
+Stop (keeps Prometheus data volume, and any Grafana state you mapped to a volume):
 
 ```bash
 docker compose -f compose.int.yml down
@@ -167,7 +174,7 @@ docker compose -f compose.int.yml down
 
 ---
 
-### Prod-like environment (pre-built images + Prometheus)
+### Prod-like environment (pre-built images + Prometheus + Grafana)
 
 Assumes images are already built and (in a real setup) pushed to a registry:
 
@@ -181,6 +188,14 @@ Update `image:` tags in `compose.prod.yml` to point to your registry if needed, 
 ```yaml
 image: ghcr.io/your-username/golang-gin-app:1.0.0
 ```
+
+Endpoints (example):
+
+- Gin: `http://localhost:8081`
+- Spring Boot: `http://localhost:8082`
+- Django: `http://localhost:8083`
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000`
 
 Stop:
 
@@ -221,13 +236,17 @@ All three stacks share the same operational story:
     - includes `service`, `version`, `method`, `path`, `status`, `latency`, `userAgent`
   - Infra endpoints (`/health`, `/ready`, `/metrics`) are not logged to reduce noise, but are still counted in metrics.
 
+- Visualization
+  - Prometheus UI at `:9090` for raw queries
+  - Grafana at `:3000` (integration / prod Compose) for dashboards built on top of the same Prometheus metrics
+
 ---
 
 ## Project Structure
 
 ```text
 docker-polyglot-lab/
-├── docker/              # Docker Compose and Prometheus setup
+├── docker/              # Docker Compose, Prometheus, Grafana setup
 ├── golang-gin/          # Go 1.25.4 + Gin service (infra-focused microservice)
 ├── java-springboot/     # Java 21 + Spring Boot 3.5 service
 ├── python-django/       # Python 3.12 + Django + Gunicorn service
@@ -244,6 +263,7 @@ This lab is intentionally **light on business logic** and **heavy on operational
 - Docker images with build metadata and healthchecks
 - Compose networks, volumes, and environment-specific configs
 - Prometheus wired to every service
+- Grafana wired to Prometheus for easy dashboards
 
 It can be used as:
 - A **portfolio** piece to demonstrate Docker + observability skills.

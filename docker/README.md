@@ -1,6 +1,6 @@
-# Docker – Compose & Prometheus for docker-polyglot-lab
+# Docker – Compose, Prometheus & Grafana for docker-polyglot-lab
 
-This directory contains **Docker Compose** definitions and **Prometheus** configuration
+This directory contains **Docker Compose** definitions and **Prometheus / Grafana** configuration
 for running the polyglot lab in different environments:
 
 - `compose.dev.yml` – local dev (apps only)
@@ -15,12 +15,13 @@ All setups use a shared user-defined network:
   - `java-springboot-app`
   - `python-django-app`
   - `prometheus`
+  - `grafana`
 
 ---
 
 ## Dev environment
 
-Build and run all three apps in dev mode (no Prometheus):
+Build and run all three apps in dev mode (no Prometheus / Grafana):
 
 ```bash
 cd docker
@@ -40,15 +41,16 @@ Stop:
 docker compose -f compose.dev.yml down
 ```
 
-If you want Prometheus available in dev as well, you can copy the prometheus service
-from compose.int.yml into compose.dev.yml. The current setup keeps dev minimal and
-uses the integration environment for full observability.
+If you want Prometheus and Grafana available in dev as well, you can copy the `prometheus`
+and `grafana` services from `compose.int.yml` into `compose.dev.yml`. The current setup keeps dev
+minimal and uses the integration environment for full observability.
 
-## Integration environment (apps + Prometheus, tests on build)
+## Integration environment (apps + Prometheus + Grafana, tests on build)
 
 Integration runs:
 - All three services
 - Prometheus with a persistent data volume
+- Grafana wired to Prometheus as a datasource
 - Builds images and runs tests as part of the image build
 
 ```bash
@@ -63,17 +65,22 @@ Services:
 - Spring Boot: `http://localhost:8082`
 - Django: `http://localhost:8083`
 - Prometheus UI: `http://localhost:9090`
+- Grafana UI: `http://localhost:3000`
 
 Prometheus scrapes:
 - `prometheus:9090`
+- `grafana:3000`
 - `golang-gin-app:8080`
 - `java-springboot-app:8080`
 - `python-django-app:8080`
 
-Once Prometheus is up (integration or prod), you can try some example queries in the UI:
-- `http_requests_total` – see per-service request counts
-- `http_request_duration_seconds_bucket` – latency histogram
-- `build_info` – one sample per service with `service`, `version`, `build_time`
+Once Prometheus and Grafana are up, you can:
+
+- Run raw queries directly in Prometheus:
+  - `http_requests_total`
+  - `http_request_duration_seconds_bucket`
+  - `build_info`
+- Build dashboards in Grafana on top of the same metrics using the pre-configured Prometheus datasource.
 
 `compose.int.yml` also demonstrates:
 
@@ -87,7 +94,8 @@ Stop:
 docker compose -f compose.int.yml down
 ```
 
-The named volume `polyglot-lab-int_prometheus-data` is kept, so metrics persist.
+The named volume `polyglot-lab-int_prometheus-data` is kept, so Prometheus metrics persist.
+If you configured a named volume for Grafana, its state (dashboards, datasource config, etc.) will persist as well.
 
 ---
 
@@ -115,7 +123,9 @@ cd docker
 docker compose -f compose.prod.yml up -d
 ```
 
-Prometheus is configured identically to the integration environment.
+Prometheus and Grafana are configured similarly to the integration environment:
+- Prometheus scrapes all services
+- Grafana points at Prometheus as a datasource
 
 Stop:
 
@@ -135,10 +145,6 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
-  - job_name: "prometheus"
-    static_configs:
-      - targets: ["prometheus:9090"]
-
   - job_name: "golang-gin-app"
     static_configs:
       - targets: ["golang-gin-app:8080"]
@@ -150,12 +156,22 @@ scrape_configs:
   - job_name: "python-django-app"
     static_configs:
       - targets: ["python-django-app:8080"]
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["prometheus:9090"]
+
+  - job_name: "grafana"
+    static_configs:
+      - targets: ["grafana:3000"]
 ```
 
 Example query in the Prometheus UI:
 - `http_requests_total`
 - `http_request_duration_seconds_bucket`
 - `build_info`
+
+Grafana is configured (via Compose) to use `http://prometheus:9090` as its Prometheus datasource.
 
 ---
 
@@ -169,7 +185,8 @@ docker compose -f compose.int.yml up --build
 
 Docker will create:
 - Network: `polyglot-lab-int_polyglot-net`
-- Volume: `polyglot-lab-int_prometheus-data`
+- Volume: `polyglot-lab-int_prometheus-data` (Prometheus TSDB)
+- Volume: `polyglot-lab-int_grafana-data` (Grafana dashboards and config)
 
 Inspect:
 
@@ -183,6 +200,7 @@ Clean up explicitly if needed:
 ```bash
 docker network rm polyglot-lab-int_polyglot-net
 docker volume rm polyglot-lab-int_prometheus-data
+docker volume rm polyglot-lab-int_grafana-data
 ```
 
 Names are prefixed by the project name (`polyglot-lab-dev`, `polyglot-lab-int`, `polyglot-lab-prod`), configured via `name:` in each Compose file.
@@ -195,9 +213,11 @@ Names are prefixed by the project name (`polyglot-lab-dev`, `polyglot-lab-int`, 
   - Gin: `8081`
   - Spring Boot: `8082`
   - Django: `8083`
+- Prometheus is exposed on `9090`
+- Grafana is exposed on `3000`
 - All app images are built as:
   - multi-stage
   - non-root (user `appuser`)
   - with Docker `HEALTHCHECK` hitting `/health`
 
-This directory focuses purely on **runtime topology** (networks, volumes, metrics) and assumes each service manages its own configuration and tests.
+This directory focuses purely on **runtime topology** (networks, volumes, metrics, dashboards) and assumes each service manages its own configuration and tests.
