@@ -10,9 +10,8 @@ volumes:
 
 services:
   golang-gin-app:
-    # In real prod, this would be a registry image, e.g.:
-    # image: ghcr.io/your-username/golang-gin-app:1.0.0
-    image: golang-gin-app:1.0.0
+    image: docker.io/johnjaysonlpz/golang-gin-app:1.0.0
+    pull_policy: always
     container_name: golang-gin-app
     env_file:
       - ../golang-gin/.env.prod
@@ -28,8 +27,8 @@ services:
           memory: "256M"
 
   java-springboot-app:
-    # image: ghcr.io/your-username/java-springboot-app:1.0.0
-    image: java-springboot-app:1.0.0
+    image: docker.io/johnjaysonlpz/java-springboot-app:1.0.0
+    pull_policy: always
     container_name: java-springboot-app
     env_file:
       - ../java-springboot/.env.prod
@@ -45,8 +44,8 @@ services:
           memory: "1024M"
 
   python-django-app:
-    # image: ghcr.io/your-username/python-django-app:1.0.0
-    image: python-django-app:1.0.0
+    image: docker.io/johnjaysonlpz/python-django-app:1.0.0
+    pull_policy: always
     container_name: python-django-app
     env_file:
       - ../python-django/.env.prod
@@ -62,7 +61,7 @@ services:
           memory: "512M"
 
   prometheus:
-    image: prom/prometheus:v2.55.0
+    image: prom/prometheus:v3.8.1
     container_name: prometheus
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -86,7 +85,7 @@ services:
       retries: 3
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:12.3.1
     container_name: grafana
     environment:
       - GF_SECURITY_ADMIN_USER=admin

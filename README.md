@@ -1,6 +1,6 @@
 # docker-polyglot-lab
 
-[![CI](https://github.com/johnjaysonlpz/docker-polyglot-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/johnjaysonlpz/docker-polyglot-lab/actions/workflows/ci.yml)
+[![CI](https://github.com/johnjaysonlpz/docker-polyglot-lab/actions/workflows/cicd.yml/badge.svg)](https://github.com/johnjaysonlpz/docker-polyglot-lab/actions/workflows/cicd.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A **polyglot microservice lab** focused on *operational excellence* rather than business logic.
@@ -246,12 +246,43 @@ All three stacks share the same operational story:
 
 ```text
 docker-polyglot-lab/
-├── docker/              # Docker Compose, Prometheus, Grafana setup
-├── golang-gin/          # Go 1.25.4 + Gin service (infra-focused microservice)
-├── java-springboot/     # Java 21 + Spring Boot 3.5 service
-├── python-django/       # Python 3.12 + Django + Gunicorn service
-└── README.md            # This file
-```
+├── .github/
+│   └── workflows/
+│       └── cicd.yml        # CI/CD pipeline (tests + Docker builds + registry publish)
+├── docker/                 # Docker Compose, Prometheus, Grafana setup
+├── golang-gin/             # Go 1.25.4 + Gin service (infra-focused microservice)
+├── java-springboot/        # Java 21 + Spring Boot 3.5 service
+├── python-django/          # Python 3.12 + Django + Gunicorn service
+├── LICENSE                 # MIT license
+└── README.md               # This file
+---
+
+## CI / Docker images
+
+GitHub Actions runs on each push and pull request:
+
+- Go / Gin tests (`golang-gin/`)
+- Java / Spring Boot tests (`java-springboot/`)
+- Python / Django tests (`python-django/`)
+- A smoke Docker build for all three services
+
+When you push a **git tag** like `v1.0.0`, the CI workflow:
+
+- Builds production images for all services
+- Injects build metadata (version, build time, VCS revision, OCI labels)
+- Pushes images to a Docker registry (e.g. Docker Hub) with tags like:
+
+  - `golang-gin-app:1.0.0`
+  - `java-springboot-app:1.0.0`
+  - `python-django-app:1.0.0`
+
+The `docker/compose.prod.yml` file is designed to consume those pre-built images.
+
+Images are pushed to Docker Hub under:
+
+- `docker.io/johnjaysonlpz/golang-gin-app:<version>`
+- `docker.io/johnjaysonlpz/java-springboot-app:<version>`
+- `docker.io/johnjaysonlpz/python-django-app:<version>`
 
 ---
 

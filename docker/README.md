@@ -4,9 +4,10 @@ This directory contains **Docker Compose** definitions and **Prometheus / Grafan
 for running the polyglot lab in different environments:
 
 - `compose.dev.yml` – local dev (apps only)
-- `compose.int.yml` – integration / prod-like (apps + Prometheus, build with tests)
-- `compose.prod.yml` – production-like (pre-built images + Prometheus)
+- `compose.int.yml` – integration / prod-like (apps + Prometheus + Grafana, build with tests)
+- `compose.prod.yml` – production-like (pre-built images + Prometheus + Grafana)
 - `prometheus/prometheus.yml` – Prometheus scrape config for all services
+- `grafana/provisioning/` – Grafana provisioning for Prometheus
 
 All setups use a shared user-defined network:
 
@@ -68,11 +69,11 @@ Services:
 - Grafana UI: `http://localhost:3000`
 
 Prometheus scrapes:
-- `prometheus:9090`
-- `grafana:3000`
 - `golang-gin-app:8080`
 - `java-springboot-app:8080`
 - `python-django-app:8080`
+- `prometheus:9090`
+- `grafana:3000`
 
 Once Prometheus and Grafana are up, you can:
 
