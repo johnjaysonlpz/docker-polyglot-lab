@@ -246,12 +246,15 @@ All three stacks share the same operational story:
 
 ```text
 docker-polyglot-lab/
-├── docker/              # Docker Compose, Prometheus, Grafana setup
-├── golang-gin/          # Go 1.25.4 + Gin service (infra-focused microservice)
-├── java-springboot/     # Java 21 + Spring Boot 3.5 service
-├── python-django/       # Python 3.12 + Django + Gunicorn service
-└── README.md            # This file
-```
+├── .github/
+│   └── workflows/
+│       └── cicd.yml        # CI/CD pipeline (tests + Docker builds + registry publish)
+├── docker/                 # Docker Compose, Prometheus, Grafana setup
+├── golang-gin/             # Go 1.25.4 + Gin service (infra-focused microservice)
+├── java-springboot/        # Java 21 + Spring Boot 3.5 service
+├── python-django/          # Python 3.12 + Django + Gunicorn service
+├── LICENSE                 # MIT license
+└── README.md               # This file
 ---
 
 ## CI / Docker images

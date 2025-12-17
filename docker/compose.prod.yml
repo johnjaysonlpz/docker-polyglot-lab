@@ -10,9 +10,7 @@ volumes:
 
 services:
   golang-gin-app:
-    # In real prod, this would be a registry image, e.g.:
-    # image: ghcr.io/your-username/golang-gin-app:1.0.0
-    image: golang-gin-app:1.0.0
+    image: docker.io/johnjaysonlpz/golang-gin-app:1.0.0
     pull_policy: always
     container_name: golang-gin-app
     env_file:
@@ -29,8 +27,7 @@ services:
           memory: "256M"
 
   java-springboot-app:
-    # image: ghcr.io/your-username/java-springboot-app:1.0.0
-    image: java-springboot-app:1.0.0
+    image: docker.io/johnjaysonlpz/java-springboot-app:1.0.0
     pull_policy: always
     container_name: java-springboot-app
     env_file:
@@ -47,8 +44,7 @@ services:
           memory: "1024M"
 
   python-django-app:
-    # image: ghcr.io/your-username/python-django-app:1.0.0
-    image: python-django-app:1.0.0
+    image: docker.io/johnjaysonlpz/python-django-app:1.0.0
     pull_policy: always
     container_name: python-django-app
     env_file:
