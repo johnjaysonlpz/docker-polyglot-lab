@@ -10,7 +10,7 @@ volumes:
 
 services:
   golang-gin-app:
-    image: docker.io/johnjaysonlpz/golang-gin-app:1.0.0
+    image: docker.io/johnjaysonlopez/golang-gin-app:1.0.0
     pull_policy: always
     container_name: golang-gin-app
     env_file:
@@ -27,7 +27,7 @@ services:
           memory: "256M"
 
   java-springboot-app:
-    image: docker.io/johnjaysonlpz/java-springboot-app:1.0.0
+    image: docker.io/johnjaysonlopez/java-springboot-app:1.0.0
     pull_policy: always
     container_name: java-springboot-app
     env_file:
@@ -44,7 +44,7 @@ services:
           memory: "1024M"
 
   python-django-app:
-    image: docker.io/johnjaysonlpz/python-django-app:1.0.0
+    image: docker.io/johnjaysonlopez/python-django-app:1.0.0
     pull_policy: always
     container_name: python-django-app
     env_file:
