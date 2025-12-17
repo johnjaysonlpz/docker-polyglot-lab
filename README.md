@@ -75,14 +75,12 @@ See: [`python-django/README.md`](./python-django/README.md)
 ### 4. Docker / Compose / Prometheus / Grafana – `docker/`
 
 This directory contains:
-
 - `compose.dev.yml` – dev: three services only
 - `compose.int.yml` – integration: three services + Prometheus + Grafana, builds with tests
 - `compose.prod.yml` – prod-like: three pre-built images + Prometheus + Grafana
 - `prometheus/prometheus.yml` – scrape config for all services
 
 All Compose files use a shared network:
-
 - `polyglot-net` – containers discover each other by service name:
   - `golang-gin-app`
   - `java-springboot-app`
@@ -151,7 +149,6 @@ BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
 ```
 
 Endpoints:
-
 - Gin: `http://localhost:8081`
 - Spring Boot: `http://localhost:8082`
 - Django: `http://localhost:8083`
@@ -159,7 +156,6 @@ Endpoints:
 - Grafana: `http://localhost:3000`
 
 Example Prometheus query:
-
 - `http_requests_total`
 - `http_request_duration_seconds_bucket`
 - `build_info`
@@ -190,7 +186,6 @@ image: ghcr.io/your-username/golang-gin-app:1.0.0
 ```
 
 Endpoints (example):
-
 - Gin: `http://localhost:8081`
 - Spring Boot: `http://localhost:8082`
 - Django: `http://localhost:8083`
@@ -208,7 +203,6 @@ docker compose -f compose.prod.yml down
 ## Running stacks individually (without Docker)
 
 Each service can also be run standalone.
-
 - Go: see [`golang-gin/README.md`](./golang-gin/README.md)
 - Java: see [`java-springboot/README.md`](./java-springboot/README.md)
 - Python: see [`python-django/README.md`](./python-django/README.md)

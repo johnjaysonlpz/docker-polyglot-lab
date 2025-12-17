@@ -61,6 +61,8 @@ BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
   docker compose -f compose.int.yml up --build
 ```
 
+Integration builds images locally (no Docker Hub required). Prod-like Compose uses registry-hosted images from Docker Hub.
+
 Services:
 - Gin: `http://localhost:8081`
 - Spring Boot: `http://localhost:8082`
@@ -108,8 +110,6 @@ Current example:
 
 ```yaml
 golang-gin-app:
-  # In real prod, this would be a registry image, e.g.:
-  # image: ghcr.io/your-username/golang-gin-app:1.0.0
   image: golang-gin-app:1.0.0
 ```
 
