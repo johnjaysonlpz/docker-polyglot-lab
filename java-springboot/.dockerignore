@@ -1,0 +1,34 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# IDE / editor / build tool metadata
+.vscode
+*.code-workspace
+.idea
+*.iml
+.project
+.classpath
+.settings/
+.gradle/
+*.swp
+*.swo
+
+# Build artifacts
+target/
+build/
+out/
+
+# Logs / temp files
+*.log
+*.tmp
+*.bak
+
+# JVM crash / replay files
+hs_err_pid*
+replay_pid*
+
+# OS junk
+.DS_Store
+Thumbs.db

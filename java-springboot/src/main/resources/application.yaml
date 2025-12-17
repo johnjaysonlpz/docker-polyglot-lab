@@ -1,0 +1,50 @@
+server:
+  shutdown: graceful
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:5s}
+  application:
+    name: java-springboot-app
+  threads:
+    virtual:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+      base-path: /actuator
+
+  metrics:
+    web:
+      server:
+        request:
+          autotime:
+            enabled: false
+
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+logging:
+  level:
+    root: ${LOG_LEVEL:INFO}
+
+app:
+  service-name: ${APP_SERVICE_NAME:java-springboot-app}
+  version: ${APP_VERSION:0.0.0-dev}
+  build-time: ${APP_BUILD_TIME:unknown}
+  host: ${HOST:0.0.0.0}
+  port: ${PORT:8080}
+  read-timeout: ${READ_TIMEOUT:5s}
+  idle-timeout: ${IDLE_TIMEOUT:120s}
+  shutdown-timeout: ${SHUTDOWN_TIMEOUT:5s}
