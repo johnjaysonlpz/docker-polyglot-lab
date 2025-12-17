@@ -53,7 +53,8 @@ COPY --from=builder /app/app ./app
 ARG SERVICE_NAME=python-django-app
 ARG VERSION=dev
 ARG BUILD_TIME=local
-ARG VCS_REF=local
+ARG OCI_IMAGE_SOURCE=""
+ARG OCI_IMAGE_REVISION=""
 
 # OCI image labels
 LABEL org.opencontainers.image.title="${SERVICE_NAME}" \
@@ -61,8 +62,8 @@ LABEL org.opencontainers.image.title="${SERVICE_NAME}" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.created="${BUILD_TIME}" \
       org.opencontainers.image.url="https://github.com/johnjaysonlpz/docker-polyglot-lab/tree/main/python-django" \
-      org.opencontainers.image.source="https://github.com/johnjaysonlpz/docker-polyglot-lab" \
-      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="${OCI_IMAGE_SOURCE}" \
+      org.opencontainers.image.revision="${OCI_IMAGE_REVISION}" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.authors="John Jayson Lopez"
 
