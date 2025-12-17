@@ -1,0 +1,101 @@
+#################################
+# OS / editor junk
+#################################
+.DS_Store
+Thumbs.db
+
+#################################
+# IDEs / Editors
+#################################
+
+# VS Code
+.vscode/
+
+# IntelliJ / IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Eclipse / STS / Spring tooling
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+#################################
+# Env / secrets (all stacks)
+#################################
+.env
+*.env.local
+*.local
+
+#################################
+# Go (golang-gin/)
+#################################
+# Build outputs
+golang-gin/bin/
+golang-gin/dist/
+
+# Go module cache / artifacts
+golang-gin/pkg/
+
+# Test / coverage
+golang-gin/coverage.out
+
+#################################
+# Java / Maven (java-springboot/)
+#################################
+java-springboot/target/
+
+# Sometimes nested target/build dirs (just in case)
+**/target/
+**/build/
+
+#################################
+# Python (python-django/)
+#################################
+
+# Bytecode / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtualenvs
+.venv/
+venv/
+env/
+env*/
+.venv*/
+
+# Test / coverage / tooling
+.python-version
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+
+# Local DBs (SQLite, etc.)
+*.sqlite3
+
+#################################
+# Logs
+#################################
+*.log
+logs/
