@@ -256,6 +256,7 @@ docker-polyglot-lab/
 ├── LICENSE                 # MIT license
 └── README.md               # This file
 ---
+```
 
 ## CI / Docker images
 
@@ -280,9 +281,9 @@ The `docker/compose.prod.yml` file is designed to consume those pre-built images
 
 Images are pushed to Docker Hub under:
 
-- `docker.io/johnjaysonlpz/golang-gin-app:<version>`
-- `docker.io/johnjaysonlpz/java-springboot-app:<version>`
-- `docker.io/johnjaysonlpz/python-django-app:<version>`
+- `docker.io/johnjaysonlopez/golang-gin-app:<version>`
+- `docker.io/johnjaysonlopez/java-springboot-app:<version>`
+- `docker.io/johnjaysonlopez/python-django-app:<version>`
 
 ---
 
