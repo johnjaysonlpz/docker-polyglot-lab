@@ -84,7 +84,7 @@ jobs:
     needs: [go, java, python]
     env:
       REGISTRY: docker.io
-      DOCKERHUB_NAMESPACE: johnjaysonlpz
+      DOCKERHUB_NAMESPACE: johnjaysonlopez
     steps:
       - name: Checkout
         uses: actions/checkout@v4
