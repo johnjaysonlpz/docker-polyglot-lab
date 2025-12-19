@@ -1,6 +1,13 @@
 # VCS
 .git
 .gitignore
+.gitattributes
+.github/
+
+# Local env / secrets (runtime-only, never bake into images)
+.env
+.env.*
+*.local
 
 # Python cache / bytecode
 __pycache__/
@@ -26,23 +33,28 @@ htmlcov/
 .dmypy.json
 .pyre/
 .pytype/
+.ruff_cache/
+.pyright/
 
 # Logs
 *.log
 
-# Local SQLite DB (for dev only)
+# Local SQLite DB (dev only)
 *.sqlite3
 
 # Static/media output (if generated locally)
 staticfiles/
-# static/  # uncomment only if project/static is not source
 media/
 
 # IDE / editor
-.vscode
-.idea
+.vscode/
+.idea/
 *.code-workspace
 
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Optional: docs not required for build context
+README.md
+docs/
