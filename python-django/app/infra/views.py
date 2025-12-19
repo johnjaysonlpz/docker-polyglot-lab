@@ -12,9 +12,9 @@ def root(request):
 def info(request):
     return JsonResponse(
         {
-            "service": settings.APP_SERVICE_NAME,
-            "version": settings.APP_VERSION,
-            "buildTime": settings.APP_BUILD_TIME,
+            "service": settings.SERVICE_NAME,
+            "version": settings.VERSION,
+            "buildTime": settings.BUILD_TIME,
         }
     )
 

@@ -15,9 +15,9 @@ services:
     container_name: golang-gin-app
     env_file:
       - ../golang-gin/.env.prod
-    ports:
-      - "8081:8080"
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8080"
     networks:
       - polyglot-net
     deploy:
@@ -32,9 +32,9 @@ services:
     container_name: java-springboot-app
     env_file:
       - ../java-springboot/.env.prod
-    ports:
-      - "8082:8080"
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8082:8080"
     networks:
       - polyglot-net
     deploy:
@@ -49,9 +49,9 @@ services:
     container_name: python-django-app
     env_file:
       - ../python-django/.env.prod
-    ports:
-      - "8083:8080"
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8083:8080"
     networks:
       - polyglot-net
     deploy:
@@ -66,11 +66,11 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
-    ports:
-      - "9090:9090"
-    restart: unless-stopped
-    networks:
-      - polyglot-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on:
       golang-gin-app:
         condition: service_healthy
@@ -78,11 +78,11 @@ services:
         condition: service_healthy
       python-django-app:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - polyglot-net
 
   grafana:
     image: grafana/grafana:12.3.1
@@ -93,17 +93,17 @@ services:
       - GF_METRICS_ENABLED=true
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - grafana-data:/var/lib/grafana 
-    ports:
-      - "3000:3000"
-    restart: unless-stopped
-    networks:
-      - polyglot-net
-    depends_on:
-      prometheus:
-        condition: service_healthy
+      - grafana-data:/var/lib/grafana
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - polyglot-net

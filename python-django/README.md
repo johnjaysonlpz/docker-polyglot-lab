@@ -242,18 +242,18 @@ Timeouts are parsed via `env_duration_seconds` and must be strictly > 0.
 
 Build metadata is provided via env vars and surfaced through `/info` and `build_info`:
 
-| Variable           | Default             | Description          |
-| ------------------ | ------------------- | -------------------- |
-| `APP_SERVICE_NAME` | `python-django-app` | Logical service name |
-| `APP_VERSION`      | `0.0.0-dev`         | Build version        |
-| `APP_BUILD_TIME`   | `unknown`           | Build timestamp      |
+| Variable       | Default             | Description          |
+| -------------- | ------------------- | -------------------- |
+| `SERVICE_NAME` | `python-django-app` | Logical service name |
+| `VERSION`      | `0.0.0-dev`         | Build version        |
+| `BUILD_TIME`   | `unknown`           | Build timestamp      |
 
 These map directly to:
 
 ```python
-APP_SERVICE_NAME = env_str("APP_SERVICE_NAME", "python-django-app")
-APP_VERSION = env_str("APP_VERSION", "0.0.0-dev")
-APP_BUILD_TIME = env_str("APP_BUILD_TIME", "unknown")
+SERVICE_NAME = env_str("SERVICE_NAME", "python-django-app")
+VERSION = env_str("VERSION", "0.0.0-dev")
+BUILD_TIME = env_str("BUILD_TIME", "unknown")
 ```
 
 The Dockerfile injects these values at build time:
@@ -263,9 +263,9 @@ ARG SERVICE_NAME=python-django-app
 ARG VERSION=dev
 ARG BUILD_TIME=local
 
-ENV APP_SERVICE_NAME=${SERVICE_NAME} \
-    APP_VERSION=${VERSION} \
-    APP_BUILD_TIME=${BUILD_TIME}
+ENV SERVICE_NAME=${SERVICE_NAME} \
+    VERSION=${VERSION} \
+    BUILD_TIME=${BUILD_TIME}
 ```
 
 You can verify them via:

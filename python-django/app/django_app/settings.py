@@ -46,9 +46,9 @@ def env_duration_seconds(key: str, default_seconds: int) -> float:
         raise ImproperlyConfigured(f"{key} must be > 0, got {secs}")
     return secs
 
-APP_SERVICE_NAME = env_str("APP_SERVICE_NAME", "python-django-app")
-APP_VERSION = env_str("APP_VERSION", "0.0.0-dev")
-APP_BUILD_TIME = env_str("APP_BUILD_TIME", "unknown")
+SERVICE_NAME = env_str("SERVICE_NAME", "python-django-app")
+VERSION = env_str("VERSION", "0.0.0-dev")
+BUILD_TIME = env_str("BUILD_TIME", "unknown")
 
 HOST = env_str("HOST", "0.0.0.0")
 PORT = env_int("PORT", 8080, min_val=1, max_val=65535)

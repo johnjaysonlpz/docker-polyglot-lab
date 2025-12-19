@@ -7,9 +7,9 @@ A **polyglot microservice lab** focused on *operational excellence* rather than 
 
 Three minimal HTTP services, each in a different stack:
 
-- **Go 1.25.4 + Gin** (`golang-gin/`)
-- **Java 21 + Spring Boot 3.5** (`java-springboot/`)
-- **Python 3.12 + Django + Gunicorn** (`python-django/`)
+- **Go 1.25.4 + Gin 1.11.0** (`golang-gin/`)
+- **Java 21 + Spring Boot 3.5.8** (`java-springboot/`)
+- **Python 3.12 + Django 5.2.9 + Gunicorn 23.0.0** (`python-django/`)
 
 All three expose the same basic HTTP API:
 
@@ -182,7 +182,7 @@ docker compose -f compose.prod.yml up -d
 Update `image:` tags in `compose.prod.yml` to point to your registry if needed, e.g.:
 
 ```yaml
-image: ghcr.io/your-username/golang-gin-app:1.0.0
+image: docker.io/johnjaysonlopez/golang-gin-app:1.0.0
 ```
 
 Endpoints (example):

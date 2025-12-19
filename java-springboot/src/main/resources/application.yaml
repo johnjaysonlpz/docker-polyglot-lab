@@ -40,9 +40,9 @@ logging:
     root: ${LOG_LEVEL:INFO}
 
 app:
-  service-name: ${APP_SERVICE_NAME:java-springboot-app}
-  version: ${APP_VERSION:0.0.0-dev}
-  build-time: ${APP_BUILD_TIME:unknown}
+  service-name: ${SERVICE_NAME:java-springboot-app}
+  version: ${VERSION:0.0.0-dev}
+  build-time: ${BUILD_TIME:unknown}
   host: ${HOST:0.0.0.0}
   port: ${PORT:8080}
   read-timeout: ${READ_TIMEOUT:5s}

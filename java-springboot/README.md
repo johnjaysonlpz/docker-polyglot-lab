@@ -234,9 +234,9 @@ Backed by `ServiceProperties`:
 
 Environment variables map using Spring’s relaxed binding, e.g.:
 
-- `APP_SERVICE_NAME` → `app.service-name`
-- `APP_VERSION` → `app.version`
-- `APP_BUILD_TIME` → `app.build-time`
+- `SERVICE_NAME` → `app.service-name`
+- `VERSION` → `app.version`
+- `BUILD_TIME` → `app.build-time`
 - `HOST` → `app.host`
 - `PORT` → `app.port`
 - `READ_TIMEOUT` → `app.read-timeout`
@@ -247,9 +247,9 @@ Defaults in `application.yaml`:
 
 ```yaml
 app:
-  service-name: ${APP_SERVICE_NAME:java-springboot-app}
-  version: ${APP_VERSION:0.0.0-dev}
-  build-time: ${APP_BUILD_TIME:unknown}
+  service-name: ${SERVICE_NAME:java-springboot-app}
+  version: ${VERSION:0.0.0-dev}
+  build-time: ${BUILD_TIME:unknown}
   host: ${HOST:0.0.0.0}
   port: ${PORT:8080}
   read-timeout: ${READ_TIMEOUT:5s}

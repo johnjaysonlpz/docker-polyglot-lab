@@ -54,9 +54,9 @@ LABEL org.opencontainers.image.title="${SERVICE_NAME}" \
 # including build metadata consumed by the app.
 ENV JAVA_OPTS="" \
     PORT=8080 \
-    APP_SERVICE_NAME=${SERVICE_NAME} \
-    APP_VERSION=${VERSION} \
-    APP_BUILD_TIME=${BUILD_TIME}
+    SERVICE_NAME=${SERVICE_NAME} \
+    VERSION=${VERSION} \
+    BUILD_TIME=${BUILD_TIME}
 
 # Create a dedicated non-root user & group with fixed IDs
 RUN addgroup -g 10001 appgroup \

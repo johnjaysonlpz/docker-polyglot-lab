@@ -73,13 +73,15 @@ ENV PATH="/venv/bin:$PATH" \
     DJANGO_SETTINGS_MODULE=django_app.settings \
     PORT=8080 \
     HOST=0.0.0.0 \
-    APP_SERVICE_NAME=${SERVICE_NAME} \
-    APP_VERSION=${VERSION} \
-    APP_BUILD_TIME=${BUILD_TIME} \
+    SERVICE_NAME=${SERVICE_NAME} \
+    VERSION=${VERSION} \
+    BUILD_TIME=${BUILD_TIME} \
     READ_TIMEOUT=2s \
     IDLE_TIMEOUT=30s \
     SHUTDOWN_TIMEOUT=5s \
     GUNICORN_WORKERS=2 \
+    GUNICORN_WORKER_CLASS=gthread \
+    GUNICORN_THREADS=4 \
     GUNICORN_TIMEOUT=30 \
     GUNICORN_KEEPALIVE=5
 
@@ -99,14 +101,19 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 WORKDIR /app/app
 
-# Gunicorn process configuration:
+# Gunicorn process configuration (tunable via env vars):
 # - GUNICORN_WORKERS: number of worker processes
-# - GUNICORN_TIMEOUT: max seconds before a worker is considered stuck and killed
-# - GUNICORN_KEEPALIVE: seconds to keep idle HTTP connections open
-# These can be overridden at runtime via env vars.
+# - GUNICORN_WORKER_CLASS: worker type (we use `gthread` to avoid sync workers
+#   getting tied up by slow/idle/half-open connections that can trigger
+#   "no URI read" + WORKER TIMEOUT)
+# - GUNICORN_THREADS: threads per worker (helps keep the service responsive under idle sockets)
+# - GUNICORN_TIMEOUT: seconds before a worker is killed if it makes no progress
+# - GUNICORN_KEEPALIVE: seconds to keep an idle HTTP keep-alive connection open
 ENTRYPOINT ["sh", "-c", "exec gunicorn django_app.wsgi:application \
     --bind 0.0.0.0:${PORT} \
     --workers ${GUNICORN_WORKERS} \
+    --worker-class ${GUNICORN_WORKER_CLASS} \
+    --threads ${GUNICORN_THREADS} \
     --timeout ${GUNICORN_TIMEOUT} \
     --keep-alive ${GUNICORN_KEEPALIVE} \
 "]

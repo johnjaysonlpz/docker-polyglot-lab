@@ -50,8 +50,8 @@ class HttpLoggingAndMetricsMiddleware(MiddlewareMixin):
 
         log.info(
             "http_request service=%s version=%s method=%s path=%s rawPath=%s status=%s ip=%s latencyMs=%.3f userAgent=%r",
-            settings.APP_SERVICE_NAME,
-            settings.APP_VERSION,
+            settings.SERVICE_NAME,
+            settings.VERSION,
             method,
             path_label,
             raw_path,

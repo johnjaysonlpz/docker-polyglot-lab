@@ -7,6 +7,7 @@ networks:
 services:
   golang-gin-app:
     image: golang-gin-app:dev
+    pull_policy: build
     build:
       context: ../golang-gin
       dockerfile: Dockerfile
@@ -18,14 +19,15 @@ services:
     container_name: golang-gin-app
     env_file:
       - ../golang-gin/.env.dev
-    ports:
-      - "8081:8080"
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8080"
     networks:
       - polyglot-net
 
   java-springboot-app:
     image: java-springboot-app:dev
+    pull_policy: build
     build:
       context: ../java-springboot
       dockerfile: Dockerfile
@@ -37,14 +39,15 @@ services:
     container_name: java-springboot-app
     env_file:
       - ../java-springboot/.env.dev
-    ports:
-      - "8082:8080"
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8082:8080"
     networks:
       - polyglot-net
 
   python-django-app:
     image: python-django-app:dev
+    pull_policy: build
     build:
       context: ../python-django
       dockerfile: Dockerfile
@@ -56,8 +59,8 @@ services:
     container_name: python-django-app
     env_file:
       - ../python-django/.env.dev
-    ports:
-      - "8083:8080"
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8083:8080"
     networks:
       - polyglot-net
