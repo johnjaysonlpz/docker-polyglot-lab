@@ -22,9 +22,9 @@ Thumbs.db
 .classpath
 .factorypath
 .project
-.settings
+.settings/
 .springBeans
-.sts4-cache
+.sts4-cache/
 
 # NetBeans
 /nbproject/private/
@@ -36,30 +36,49 @@ Thumbs.db
 #################################
 # Env / secrets (all stacks)
 #################################
+# Never commit real secrets
 .env
+.env.*
+!.env.dev
+!.env.int
+!.env.prod
+
+# Common local-only variants
 *.env.local
-*.local
+*.env.*.local
+
+#################################
+# Docker / Compose (repo-level)
+#################################
+# Local compose overrides
+docker-compose.override.yml
+compose.override.yml
+
+# If you ever bind-mount these instead of named volumes
+docker/grafana/data/
+docker/prometheus/data/
 
 #################################
 # Go (golang-gin/)
 #################################
-# Build outputs
+# Common local build outputs
+golang-gin/server
+golang-gin/*.test
 golang-gin/bin/
 golang-gin/dist/
 
-# Go module cache / artifacts
-golang-gin/pkg/
-
-# Test / coverage
+# Coverage outputs
 golang-gin/coverage.out
+coverage.out
 
 #################################
-# Java / Maven (java-springboot/)
+# Java / Maven / Gradle (java-springboot/)
 #################################
 java-springboot/target/
-
-# Sometimes nested target/build dirs (just in case)
 **/target/
+
+# Gradle (in case you add it later)
+.gradle/
 **/build/
 
 #################################
@@ -78,8 +97,12 @@ env/
 env*/
 .venv*/
 
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+
 # Test / coverage / tooling
-.python-version
 .pytest_cache/
 .tox/
 .nox/
@@ -90,6 +113,8 @@ htmlcov/
 .dmypy.json
 .pyre/
 .pytype/
+.ruff_cache/
+.pyright/
 
 # Local DBs (SQLite, etc.)
 *.sqlite3
