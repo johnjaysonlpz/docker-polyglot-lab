@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"log/slog"
 	"strconv"
 	"time"
@@ -8,10 +10,36 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var skipLogRoutes = map[string]struct{}{
+const (
+	requestIDHeader     = "X-Request-ID"
+	requestIDContextKey = "request_id"
+	unmatchedRouteLabel = "__unmatched__"
+)
+
+var skipLogPaths = map[string]struct{}{
 	LivenessPath:  {}, // "/health"
 	ReadinessPath: {}, // "/ready"
 	MetricsPath:   {}, // "/metrics"
+}
+
+func newRequestID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b[:])
+}
+
+func RequestIDMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		rid := c.GetHeader(requestIDHeader)
+		if rid == "" {
+			rid = newRequestID()
+		}
+		c.Set(requestIDContextKey, rid)
+		c.Writer.Header().Set(requestIDHeader, rid)
+		c.Next()
+	}
 }
 
 func GinSlogMiddleware(l *slog.Logger, cfg Config, m *Metrics) gin.HandlerFunc {
@@ -23,33 +51,41 @@ func GinSlogMiddleware(l *slog.Logger, cfg Config, m *Metrics) gin.HandlerFunc {
 
 		latency := time.Since(start)
 		statusCode := c.Writer.Status()
-
 		routePath := c.FullPath()
-		if routePath == "" {
-			routePath = rawPath
+
+		pathLabel := routePath
+		if pathLabel == "" {
+			pathLabel = unmatchedRouteLabel
 		}
 
 		method := c.Request.Method
 		status := strconv.Itoa(statusCode)
-
 		latencySeconds := float64(latency) / float64(time.Second)
 
-		m.HTTPRequestsTotal.WithLabelValues(cfg.ServiceName, method, routePath, status).Inc()
-		m.HTTPRequestDurationSeconds.WithLabelValues(cfg.ServiceName, method, routePath, status).Observe(latencySeconds)
+		m.HTTPRequestsTotal.WithLabelValues(cfg.ServiceName, method, pathLabel, status).Inc()
+		m.HTTPRequestDurationSeconds.WithLabelValues(cfg.ServiceName, method, pathLabel, status).Observe(latencySeconds)
 
-		if _, ok := skipLogRoutes[routePath]; ok {
+		if _, ok := skipLogPaths[rawPath]; ok {
 			return
+		}
+
+		lvl := slog.LevelInfo
+		if statusCode >= 500 {
+			lvl = slog.LevelError
+		} else if statusCode >= 400 {
+			lvl = slog.LevelWarn
 		}
 
 		attrs := []any{
 			"status", statusCode,
 			"method", method,
-			"path", routePath,
+			"path", pathLabel,
 			"rawPath", rawPath,
 			"query", c.Request.URL.RawQuery,
 			"ip", c.ClientIP(),
 			"latency", latency.String(),
 			"userAgent", c.Request.UserAgent(),
+			"request_id", c.GetString(requestIDContextKey),
 		}
 
 		if len(c.Errors) > 0 {
@@ -58,9 +94,11 @@ func GinSlogMiddleware(l *slog.Logger, cfg Config, m *Metrics) gin.HandlerFunc {
 				errs[i] = e.Error()
 			}
 			attrs = append(attrs, "errors", errs)
-			l.Error("http_request", attrs...)
-		} else {
-			l.Info("http_request", attrs...)
+			if lvl < slog.LevelWarn {
+				lvl = slog.LevelWarn
+			}
 		}
+
+		l.Log(c.Request.Context(), lvl, "http_request", attrs...)
 	}
 }

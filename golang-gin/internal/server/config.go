@@ -21,9 +21,12 @@ type Config struct {
 	ReadHeaderTimeout time.Duration
 	IdleTimeout       time.Duration
 	ShutdownTimeout   time.Duration
-	ServiceName       string
-	Version           string
-	BuildTime         string
+
+	TrustedProxies []string
+
+	ServiceName string
+	Version     string
+	BuildTime   string
 }
 
 func parseLogLevel(s string) slog.Level {
@@ -58,6 +61,22 @@ func parseDurationEnv(key string, def time.Duration) time.Duration {
 	return d
 }
 
+func parseCSVEnv(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		t := strings.TrimSpace(p)
+		if t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 func LoadConfig(serviceName, version, buildTime string) Config {
 	mode := os.Getenv("GIN_MODE")
 	if mode == "" {
@@ -86,9 +105,12 @@ func LoadConfig(serviceName, version, buildTime string) Config {
 		ReadHeaderTimeout: parseDurationEnv("READ_HEADER_TIMEOUT", 2*time.Second),
 		IdleTimeout:       parseDurationEnv("IDLE_TIMEOUT", 120*time.Second),
 		ShutdownTimeout:   parseDurationEnv("SHUTDOWN_TIMEOUT", 5*time.Second),
-		ServiceName:       serviceName,
-		Version:           version,
-		BuildTime:         buildTime,
+
+		TrustedProxies: parseCSVEnv("TRUSTED_PROXIES"),
+
+		ServiceName: serviceName,
+		Version:     version,
+		BuildTime:   buildTime,
 	}
 }
 

@@ -5,53 +5,75 @@ FROM golang:1.25.4-alpine AS builder
 
 WORKDIR /app
 
-# Build settings: produce a static-ish Linux/amd64 binary
-ENV CGO_ENABLED=0 \
-    GOOS=linux \
-    GOARCH=amd64
+# Build strategy:
+# - CGO_ENABLED=0 produces a "static-ish" binary (no libc dependency at runtime),
+#   which plays nicely with small Alpine runtime images.
+# - If you later need cgo (e.g., sqlite extensions), switch this back on.
+ENV CGO_ENABLED=0
 
-# Build-time arguments:
-# - RUN_TESTS: whether to run `go test ./...` during the image build
-# - SERVICE_NAME, VERSION, BUILD_TIME: injected into the binary via ldflags
+# Multi-arch support:
+# BuildKit/Buildx populate these automatically. If not using Buildx, they may be empty.
+ARG TARGETOS
+ARG TARGETARCH
+
+# Build-time arguments (CI/Compose contract):
+# - RUN_TESTS: optional unit tests during image build
+# - SERVICE_NAME / VERSION / BUILD_TIME: build metadata (embedded into the binary)
 ARG RUN_TESTS=true
 ARG SERVICE_NAME=golang-gin-app
 ARG VERSION=dev
 ARG BUILD_TIME=local
 
-# Copy go.mod/go.sum first to leverage Docker layer caching for dependencies
+# Dependency caching:
+# Copy go.mod/go.sum first so module download stays cached unless deps change.
 COPY go.mod go.sum ./
-RUN go mod download
 
-# Copy the rest of the source code
+# BuildKit cache mount:
+# Persists Go module cache between builds on the same runner/machine.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+# Copy the remainder of the source after dependencies are cached.
 COPY . .
 
-# Optionally run unit tests as part of the build
-RUN if [ "$RUN_TESTS" = "true" ]; then go test ./...; fi
+# Optional unit tests (defense-in-depth gate).
+# Cache mounts speed up repeated test/build cycles.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    if [ "$RUN_TESTS" = "true" ]; then go test ./...; fi
 
-# Build the binary with stripped symbols and embedded build metadata
-RUN go build \
-    -ldflags="-s -w \
-      -X main.ServiceName=${SERVICE_NAME} \
-      -X main.Version=${VERSION} \
-      -X main.BuildTime=${BUILD_TIME}" \
-    -o server ./cmd/server
+# Build the binary into a stable output location (/out/server).
+# - GOOS/GOARCH enable cross-compilation when Buildx passes TARGETOS/TARGETARCH.
+# - -s -w strips debug symbols to reduce size.
+# - -X injects build metadata into variables used by /info + metrics.
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build \
+      -ldflags="-s -w \
+        -X main.ServiceName=${SERVICE_NAME} \
+        -X main.Version=${VERSION} \
+        -X main.BuildTime=${BUILD_TIME}" \
+      -o /out/server ./cmd/server
+
 
 # ==============================
 # Stage 2: Runtime image
 # ==============================
 FROM alpine:3.20
 
-# Install only what the app needs at runtime (HTTP healthcheck + TLS)
+# Runtime packages:
+# - curl: used by container HEALTHCHECK (simple and reliable)
+# - ca-certificates: enables outbound TLS and avoids x509 surprises
 RUN apk add --no-cache curl ca-certificates
 
-# Re-declare build-time args for use in labels
+# Build-time args re-declared in runtime stage (used for labels + ENV defaults).
 ARG SERVICE_NAME=golang-gin-app
 ARG VERSION=dev
 ARG BUILD_TIME=local
 ARG OCI_IMAGE_SOURCE=""
 ARG OCI_IMAGE_REVISION=""
 
-# OCI image labels
+# OCI labels (traceability):
+# Visible in registries and `docker inspect`, helps map an image back to source+commit.
 LABEL org.opencontainers.image.title="${SERVICE_NAME}" \
       org.opencontainers.image.description="Polyglot lab - Go + Gin HTTP service" \
       org.opencontainers.image.version="${VERSION}" \
@@ -62,28 +84,38 @@ LABEL org.opencontainers.image.title="${SERVICE_NAME}" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.authors="John Jayson Lopez"
 
-# Default runtime configuration (overridable via env vars)
+# Runtime env defaults (overridable via Compose):
+# - GIN_MODE=release disables Gin debug logging.
+# - PORT is used by the app and healthcheck.
+# - SERVICE_NAME/VERSION/BUILD_TIME are exported for runtime parity/debugging
+#   even though Go also embeds them into the binary via ldflags.
 ENV GIN_MODE=release \
-    PORT=8080
+    PORT=8080 \
+    SERVICE_NAME=${SERVICE_NAME} \
+    VERSION=${VERSION} \
+    BUILD_TIME=${BUILD_TIME}
 
-# Create a dedicated non-root user & group with fixed IDs
+# Non-root runtime user (security posture):
+# Fixed UID/GID improves consistency across hosts/volumes.
 RUN addgroup -g 10001 appgroup \
     && adduser -D -u 10001 -G appgroup appuser
 
 WORKDIR /app
 
-# Copy the compiled binary from the builder image
-COPY --chown=appuser:appgroup --from=builder /app/server ./server
+# Copy the compiled binary from builder output.
+# --chown avoids permission issues when running as non-root.
+COPY --chown=appuser:appgroup --from=builder /out/server ./server
 
-# Document the container port (actual mapping is done at runtime)
+# Document container port (host mapping is done by Compose).
 EXPOSE 8080
 
-# Run as non-root for better security
 USER appuser
 
-# Container-level liveness check: hit the HTTP /health endpoint
+# Container liveness:
+# Use 127.0.0.1 so healthcheck doesn't depend on DNS/networking.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD curl -fsS http://127.0.0.1:${PORT}/health || exit 1
 
-# Start the Go HTTP server
+# Entrypoint (exec form):
+# No shell; SIGTERM is delivered directly to the process.
 ENTRYPOINT ["./server"]

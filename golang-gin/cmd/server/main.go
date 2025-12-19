@@ -47,6 +47,7 @@ func main() {
 		WriteTimeout:      cfg.WriteTimeout,
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		IdleTimeout:       cfg.IdleTimeout,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
 	}
 
 	quit := make(chan os.Signal, 1)

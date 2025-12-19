@@ -1,7 +1,10 @@
 server:
   shutdown: graceful
+  forward-headers-strategy: framework
 
 spring:
+  main:
+    banner-mode: "off"
   lifecycle:
     timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:5s}
   application:

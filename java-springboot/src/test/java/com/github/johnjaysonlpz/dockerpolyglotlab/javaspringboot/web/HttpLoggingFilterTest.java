@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
@@ -56,10 +57,26 @@ class HttpLoggingFilterTest {
     }
 
     @Test
+    void addsRequestIdHeaderWhenMissing() throws Exception {
+        mockMvc.perform(get("/"))
+            .andExpect(status().isOk())
+            .andExpect(header().exists(RequestIdFilter.HEADER_NAME));
+    }
+
+    @Test
+    void reusesIncomingRequestId() throws Exception {
+        mockMvc.perform(get("/").header(RequestIdFilter.HEADER_NAME, "test-req-123"))
+            .andExpect(status().isOk())
+            .andExpect(header().string(RequestIdFilter.HEADER_NAME, "test-req-123"));
+    }
+
+    @Test
     void skipsInfraEndpointsInLogs() throws Exception {
         for (String path : List.of("/health", "/ready", "/metrics")) {
             appender.list.clear();
-            mockMvc.perform(get(path)).andExpect(status().isOk());
+            mockMvc.perform(get(path))
+                .andExpect(status().isOk());
+
             assertThat(appender.list).as("logs for %s", path).isEmpty();
         }
     }
@@ -68,9 +85,7 @@ class HttpLoggingFilterTest {
     void logsApplicationEndpoints() throws Exception {
         mockMvc.perform(get("/")).andExpect(status().isOk());
 
-        assertThat(appender.list)
-            .isNotEmpty();
-
+        assertThat(appender.list).isNotEmpty();
         String message = appender.list.get(0).getFormattedMessage();
         assertThat(message).contains("http_request");
     }

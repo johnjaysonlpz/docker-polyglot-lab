@@ -35,8 +35,6 @@ public class MetricsConfiguration {
         return registry -> Gauge
             .builder("build_info", () -> 1)
             .description("Build information for the service.")
-            .tag("service", props.getServiceName())
-            .tag("version", props.getVersion())
             .tag("build_time", props.getBuildTime())
             .register(registry);
     }

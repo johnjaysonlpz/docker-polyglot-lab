@@ -5,9 +5,11 @@ A small, production-style HTTP service built with **Java 21** and **Spring Boot 
 This service focuses on **operational concerns** rather than business logic:
 
 - Health & readiness endpoints
-- Structured JSON logging via Logback + logstash encoder
+- Structured JSON logging (Logback + logstash encoder)
+- Request correlation via `X-Request-ID` (stored in MDC as `request_id`)
 - Prometheus metrics (`/metrics`) via Micrometer + Prometheus registry
 - Graceful shutdown with Spring Boot + Tomcat tuning
+- Correct client IP handling behind proxies (Forwarded headers)
 - Configuration via `application.yaml` + environment variables
 - Multi-stage Docker build, non-root runtime
 
@@ -76,7 +78,8 @@ curl http://localhost:8080/metrics
 
 ### Build the image
 
-The Dockerfile uses a multi-stage build (Maven builder → JRE runtime) and optionally runs tests:
+The Dockerfile uses a multi-stage build (Maven builder → JRE runtime) and optionally runs tests.
+It also uses **BuildKit cache mounts** for faster Maven builds.
 
 ```bash
 docker build \
@@ -105,21 +108,19 @@ docker ps
 docker logs -f java-springboot-app
 ```
 
-Example logs:
+Example logs (JSON to stdout):
 
 ```bash
-19:15:44.328 [main] INFO com.github.johnjaysonlpz.dockerpolyglotlab.javaspringboot.JavaSpringbootApplication -- bootstrapping_application
-
-{"@timestamp":"2025-12-15T19:15:47.441992266Z","level":"INFO","thread_name":"main","logger_name":"com.github.johnjaysonlpz.dockerpolyglotlab.javaspringboot.JavaSpringbootApplication","message":"starting_server service=java-springboot-app version=1.0.0 buildTime=2025-12-15T19:15:16Z addr=0.0.0.0:8080 profiles=int"}
-{"@timestamp":"2025-12-15T19:17:10.943084248Z","level":"INFO","thread_name":"tomcat-handler-5","logger_name":"http","message":"http_request service=java-springboot-app version=1.0.0 method=GET path=/ rawPath=/ status=200 ip=172.17.0.1 latencyMs=9 userAgent=\"Mozilla/5.0 ...\""}
+{"@timestamp":"2025-12-19T07:47:35.109264374Z","message":"Tomcat initialized with port 8080 (http)","logger_name":"org.springframework.boot.web.embedded.tomcat.TomcatWebServer","thread_name":"main","level":"INFO"}
 ```
 
 The resulting image:
-
-- Uses eclipse-temurin:21-jre-alpine as runtime
-- Includes only curl + CA certs
-- Runs as non-root user appuser (UID 10001)
-- Has a Docker HEALTHCHECK hitting /health
+- Uses `eclipse-temurin:21-jre-alpine` as runtime
+- Includes only `curl` + CA certs
+- Runs as non-root user `appuser` (UID `10001`)
+- Has a Docker `HEALTHCHECK` hitting `/health`
+- Uses `JAVA_TOOL_OPTIONS` for container-safe JVM defaults
+- Uses a direct `ENTRYPOINT ["java", "-jar", ...]` (no `sh -c`)
 
 ---
 
@@ -127,17 +128,15 @@ The resulting image:
 
 All endpoints are HTTP GET.
 
-| Path       | Description                                                              | Status codes                                |
-| ---------- | ------------------------------------------------------------------------ | ------------------------------------------- |
-| `/`        | Simple banner: `"java-springboot-app is running (Java + Spring Boot)\n"` | `200`                                       |
-| `/info`    | Service metadata (`service`, `version`, `buildTime`) as JSON             | `200`                                       |
-| `/health`  | Liveness probe (based on Spring `LivenessState`)                         | `200` if healthy, `500` otherwise           |
-| `/ready`   | Readiness probe (based on `ReadinessStateHolder`)                        | `200` if accepting traffic, `503` otherwise |
-| `/metrics` | Prometheus metrics (text exposition format)                              | `200`                                       |
+| Path       | Description                                               | Status codes                                |
+| ---------- | --------------------------------------------------------- | ------------------------------------------- |
+| `/`        | `"java-springboot-app is running (Java + Spring Boot)\n"` | `200`                                       |
+| `/info`    | Metadata (`service`, `version`, `buildTime`)              | `200`                                       |
+| `/health`  | Liveness probe (based on Spring `LivenessState`)          | `200` if healthy, `500` otherwise           |
+| `/ready`   | Readiness probe (based on Spring `ReadinessState`)        | `200` if accepting traffic, `503` otherwise |
+| `/metrics` | Prometheus metrics (text exposition format)               | `200`                                       |
 
-In a real system, `/ready` would incorporate dependency checks (DB, downstream services, etc.).
-
-Examples (Docker, mapped to host port `8082`):
+Examples (Docker, mapped to host port 8082):
 
 ```bash
 curl http://localhost:8082/
@@ -147,36 +146,75 @@ curl http://localhost:8082/ready
 curl http://localhost:8082/metrics
 ```
 
-Spring Boot Actuator endpoints are also exposed under `/actuator` for `health` and `info`, but the primary “infra” endpoints in this app are the top-level paths above.
+Actuator endpoints are exposed under `/actuator` for `health` and `info`, but the primary “infra” endpoints in this app are the top-level paths above.
 
 ---
 
 ## Observability
 
-### Structured logging
+### Request correlation (`X-Request-ID`)
 
-Logging is handled by Logback with `logstash-logback-encoder`:
-
-- `src/main/resources/logback-spring.xml` configures a JSON console appender
-- Root logger writes structured JSON to `stdout`
-- HTTP access logs use the dedicated logger `"http"` (configured in `HttpLoggingFilter`)
-- Infra endpoints (`/health`, `/ready`, `/metrics`, `/actuator/**`) are not logged to keep noise low
-
-Example HTTP log (from `HttpLoggingFilter`):
+Request correlation is implemented in `RequestIdFilter`:
+- If the client sends `X-Request-ID`, the service reuses it
+- Otherwise, the service generates one (UUID)
+- The value is always returned in the response header `X-Request-ID`
+- It is also stored in MDC as `request_id` and included in logs
 
 ```bash
-{"@timestamp":"2025-12-15T19:17:19.550369602Z",
- "level":"INFO",
- "thread_name":"tomcat-handler-11",
- "logger_name":"http",
- "message":"http_request service=java-springboot-app version=1.0.0 method=GET path=/info rawPath=/info status=200 ip=172.17.0.1 latencyMs=24 userAgent=\"Mozilla/5.0 ...\""}
+curl -i -H "X-Request-ID: demo-123" http://localhost:8082/info
 ```
 
-Application lifecycle logs:
+### Structured logging
 
-- JavaSpringbootApplication logs bootstrapping_application before startup
-- On ApplicationReadyEvent, logs starting_server ...
-- On ContextClosedEvent, logs server_shutdown_complete ...
+Logging is configured for consistent JSON output:
+
+- Logback emits JSON to stdout
+- `LOG_LEVEL` is honored (root level is not hardcoded)
+- Spring banner is disabled for cleaner logs
+- HTTP access logs are emitted by the logger `"http"` and include real JSON fields using structured arguments
+- Severity is based on status code:
+    - `2xx/3xx` -> `INFO`
+    - `4xx` -> `WARN`
+    - `5xx` -> `ERROR`
+- Infra endpoints (`/health`, `/ready`, `/metrics`,` /actuator/**`) are not logged (but still counted in metrics)
+
+Example HTTP log (shape):
+
+```bash
+{
+  "@timestamp":"...",
+  "level":"WARN",
+  "logger_name":"http",
+  "message":"http_request",
+  "service":"java-springboot-app",
+  "version":"1.0.0",
+  "request_id":"demo-123",
+  "method":"GET",
+  "path":"__unmatched__",
+  "rawPath":"/favicon.ico",
+  "status":404,
+  "ip":"...",
+  "latencyMs":3,
+  "userAgent":"..."
+}
+
+```
+
+### Client IP correctness behind proxies
+
+`application.yaml` enables:
+
+```yaml
+server:
+  forward-headers-strategy: framework
+```
+
+The HTTP logging filter also prefers:
+- `X-Forwarded-For` (first IP)
+- then `X-Real-IP`
+- then falls back to `request.getRemoteAddr()`
+
+This maps cleanly to AWS ALB / reverse proxy deployments.
 
 ### Prometheus metrics (Micrometer)
 
@@ -184,7 +222,6 @@ Metrics are implemented via Micrometer + Prometheus:
 
 - `io.micrometer:micrometer-registry-prometheus`
 - `PrometheusMeterRegistry` wired in `MetricsConfiguration`
-- Custom registry uses `PrometheusRegistry` internally
 - Metrics scraped via `/metrics` (see `MetricsController`)
 
 Key metrics:
@@ -193,19 +230,11 @@ Key metrics:
 - `http_request_duration_seconds{service,method,path,status}` (timer + histogram)
 - `build_info{service,version,build_time}` (gauge with value `1`)
 
-Common tags:
+For unknown routes, metrics use a stable label:
 
-- `service`
-- `version`
+- `path="__unmatched__"` (raw paths are never used in metrics)
 
-are added via `MeterRegistryCustomizer` using `ServiceProperties`.
-
-The HTTP filter (`HttpLoggingFilter`) records metrics for every request, using:
-
-- `method` (HTTP verb)
-- `path` (Spring handler mapping pattern, e.g. `/info`)
-- `status` (HTTP status code)
-- Request duration (for `http_request_duration_seconds`)
+Note: Spring may provide a handler pattern like `/**` for some 404s; the filter normalizes those to `__unmatched__` for metrics and logs.
 
 ---
 
@@ -243,86 +272,6 @@ Environment variables map using Spring’s relaxed binding, e.g.:
 - `IDLE_TIMEOUT` → `app.idle-timeout`
 - `SHUTDOWN_TIMEOUT` → `app.shutdown-timeout`
 
-Defaults in `application.yaml`:
-
-```yaml
-app:
-  service-name: ${SERVICE_NAME:java-springboot-app}
-  version: ${VERSION:0.0.0-dev}
-  build-time: ${BUILD_TIME:unknown}
-  host: ${HOST:0.0.0.0}
-  port: ${PORT:8080}
-  read-timeout: ${READ_TIMEOUT:5s}
-  idle-timeout: ${IDLE_TIMEOUT:120s}
-  shutdown-timeout: ${SHUTDOWN_TIMEOUT:5s}
-```
-
-### Server & lifecycle config
-
-From `application.yaml`:
-
-```yaml
-server:
-  shutdown: graceful
-
-spring:
-  lifecycle:
-    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:5s}
-  application:
-    name: java-springboot-app
-  threads:
-    virtual:
-      enabled: true
-```
-
-`ServerConfiguration` customizes Tomcat based on `ServiceProperties`:
-
-Binds to `app.host` / `app.port`
-
-Sets `connectionTimeout` and `keepAliveTimeout` from `readTimeout` and `idleTimeout`
-
-### Health & probes
-
-Actuator & health configuration:
-
-```yaml
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info
-      base-path: /actuator
-
-  endpoint:
-    health:
-      probes:
-        enabled: true
-
-  health:
-    livenessstate:
-      enabled: true
-    readinessstate:
-      enabled: true
-```
-
-Environment variables like these are used in the `.env.*` files:
-
-- `MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED`
-- `MANAGEMENT_HEALTH_LIVENESSSTATE_ENABLED`
-- `MANAGEMENT_HEALTH_READINESSSTATE_ENABLED`
-
-### Logging level
-
-From `application.yaml`:
-
-```yaml
-logging:
-  level:
-    root: ${LOG_LEVEL:INFO}
-```
-
-Use `LOG_LEVEL=DEBUG` or `LOG_LEVEL=INFO` in `.env.*` files.
-
 ---
 
 ## `.env` profiles
@@ -350,47 +299,9 @@ MANAGEMENT_HEALTH_LIVENESSSTATE_ENABLED=true
 MANAGEMENT_HEALTH_READINESSSTATE_ENABLED=true
 ```
 
-Use with Docker:
-
-```bash
-docker run -d \
-  --name java-springboot-app \
-  --restart unless-stopped \
-  --env-file .env.int \
-  -p 8082:8080 \
-  java-springboot-app:1.0.0
-```
-
 ---
 
 ## Testing
-
-Tests live under src/test/java/... and cover:
-
-- ### Configuration properties & validation
-    - `ServicePropertiesTest`:
-        - Binds defaults when unset
-        - Binds valid override values
-        - Fails validation for invalid values (e.g. port out of range, blank host, zero timeouts)
-
-    - `InvalidConfigStartupTest`:
-        - Asserts that invalid config (`--app.port=70000`, `--app.host= `) causes startup failure
-
-- ### Infra web layer
-    - `InfraControllerTest`:
-        - `/` returns banner
-        - `/health` and `/ready` respond `200` under normal conditions
-        - `/info` returns expected JSON metadata
-        - `/ready` returns `503` when readiness state refuses traffic
-
-    - `MetricsControllerTest`:
-        - `/metrics` contains `http_requests_total` after hitting `/`
-
-- ### HTTP logging filter
-    - `HttpLoggingFilterTest`:
-
-        - Verifies `/health`, `/ready`, `/metrics` produce no `"http_request"` logs
-        - Verifies application routes (like `/`) do produce `"http_request"` logs
 
 Run all tests:
 
@@ -398,13 +309,15 @@ Run all tests:
 mvn test
 ```
 
-The Docker build also supports toggling tests:
+Coverage includes:
+- Configuration binding + validation (`ServicePropertiesTest`, `InvalidConfigStartupTest`)
+- Infra endpoints (`InfraControllerTest`, `MetricsControllerTest`)
+- Request ID behavior (`HttpLoggingFilterTest` asserts `X-Request-ID` exists and is reused)
+- Stable 404 metrics label (`HttpMetricsUnmatchedTest` asserts `path="__unmatched__"`)
 
+Docker build can run or skip tests:
 ```bash
-# Run full test suite during image build
 docker build --build-arg RUN_TESTS=true -t java-springboot-app:test .
-
-# Skip tests (e.g. if already run in CI)
 docker build --build-arg RUN_TESTS=false -t java-springboot-app:fast .
 ```
 
@@ -418,24 +331,26 @@ java-springboot/
 ├── src/
 │   ├── main/
 │   │   ├── java/com/github/johnjaysonlpz/dockerpolyglotlab/javaspringboot/
-│   │   │   ├── JavaSpringbootApplication.java    # Bootstraps Spring Boot app
+│   │   │   ├── JavaSpringbootApplication.java        # Bootstraps Spring Boot app
 │   │   │   ├── config/
-│   │   │   │   ├── ServiceProperties.java        # app.* config + validation
-│   │   │   │   ├── ServerConfiguration.java      # Tomcat host/port/timeouts
-│   │   │   │   ├── MetricsConfiguration.java     # Micrometer + Prometheus
-│   │   │   │   └── ReadinessStateHolder.java     # Tracks ReadinessState
+│   │   │   │   ├── ServiceProperties.java            # app.* config + validation
+│   │   │   │   ├── ServerConfiguration.java          # Tomcat host/port/timeouts
+│   │   │   │   ├── MetricsConfiguration.java         # Micrometer + Prometheus + build_info
+│   │   │   │   └── HttpServerMetrics.java            # Cached meters for http_* metrics
 │   │   │   └── web/
-│   │   │       ├── InfraController.java          # /, /info, /health, /ready
-│   │   │       ├── MetricsController.java        # /metrics endpoint
-│   │   │       └── HttpLoggingFilter.java        # Logging + metrics per HTTP
+│   │   │       ├── InfraController.java              # /, /info, /health, /ready
+│   │   │       ├── MetricsController.java            # /metrics endpoint
+│   │   │       ├── RequestIdFilter.java              # X-Request-ID + MDC request_id
+│   │   │       └── HttpLoggingFilter.java            # Logging + metrics per HTTP
 │   │   └── resources/
-│   │       ├── application.yaml                  # Core config & management
-│   │       └── logback-spring.xml                # JSON logging config
+│   │       ├── application.yaml                      # Core config & management
+│   │       └── logback-spring.xml                    # JSON logging config
 │   └── test/
 │       ├── .../JavaSpringbootApplicationTests.java
 │       ├── .../config/ServicePropertiesTest.java
 │       ├── .../config/InvalidConfigStartupTest.java
 │       ├── .../web/HttpLoggingFilterTest.java
+│       ├── .../web/HttpMetricsUnmatchedTest.java
 │       ├── .../web/InfraControllerTest.java
 │       └── .../web/MetricsControllerTest.java
 ├── Dockerfile
@@ -450,13 +365,15 @@ java-springboot/
 ## Notes
 
 - This service intentionally has **minimal business logic** and **strong operational patterns**:
-    - health/readiness probes
-    - Micrometer + Prometheus metrics
-    - JSON structured logging
-    - graceful shutdown & Tomcat tuning
-    - Docker best practices (multi-stage build, non-root, health check)
+  - health/readiness probes
+  - Micrometer + Prometheus metrics
+  - JSON structured logging + request correlation (MDC)
+  - severity-based HTTP logs
+  - forward headers strategy for proxy correctness
+  - graceful shutdown & Tomcat tuning
+  - Docker best practices (multi-stage build, non-root, health check)
 - In the full `docker-polyglot-lab` project, there are equivalent services in:
-    - Go + Gin (`golang-gin-app`)
-    - Python + Django (`python-django-app`)
+    - Go + Gin (`/golang-gin `)
+    - Python + Django (`/python-django`)
 
 You can use this Spring Boot service as a template for new Java microservices with production-friendly defaults.

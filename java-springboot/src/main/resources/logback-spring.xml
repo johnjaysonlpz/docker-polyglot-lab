@@ -2,23 +2,32 @@
 
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
+    <springProperty scope="context" name="ROOT_LOG_LEVEL" source="LOG_LEVEL" defaultValue="INFO"/>
+
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
-            <providers>
-                <timestamp/>
-                <logLevel/>
-                <threadName/>
-                <loggerName/>
-                <message/>
-                <arguments/>
-                <mdc/>
-                <context/>
-                <stackTrace/>
-            </providers>
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <fieldNames>
+                <timestamp>@timestamp</timestamp>
+                <level>level</level>
+                <thread>thread_name</thread>
+                <logger>logger_name</logger>
+                <message>message</message>
+            </fieldNames>
+
+            <includeMdc>true</includeMdc>
+            <includeStructuredArguments>true</includeStructuredArguments>
+            <includeNonStructuredArguments>false</includeNonStructuredArguments>
+
+            <throwableConverter class="net.logstash.logback.stacktrace.ShortenedThrowableConverter">
+                <maxDepthPerThrowable>30</maxDepthPerThrowable>
+                <maxLength>8192</maxLength>
+                <shortenedClassNameLength>40</shortenedClassNameLength>
+                <rootCauseFirst>true</rootCauseFirst>
+            </throwableConverter>
         </encoder>
     </appender>
 
-    <root level="INFO">
+    <root level="${ROOT_LOG_LEVEL}">
         <appender-ref ref="CONSOLE"/>
     </root>
 

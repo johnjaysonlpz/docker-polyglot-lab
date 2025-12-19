@@ -2,11 +2,12 @@
 .git
 .gitignore
 .gitattributes
+.github/
 
 # IDE / editor / build tool metadata
-.vscode
+.vscode/
 *.code-workspace
-.idea
+.idea/
 *.iml
 .project
 .classpath
@@ -14,6 +15,11 @@
 .gradle/
 *.swp
 *.swo
+
+# Local env / secrets
+.env
+.env.*
+*.local
 
 # Build artifacts
 target/
@@ -29,6 +35,15 @@ out/
 hs_err_pid*
 replay_pid*
 
+# Maven wrapper (not needed since the builder image already has Maven)
+.mvn/
+mvnw
+mvnw.cmd
+
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Optional: docs not required for build context
+README.md
+docs/

@@ -1,5 +1,7 @@
 package com.github.johnjaysonlpz.dockerpolyglotlab.javaspringboot;
 
+import static net.logstash.logback.argument.StructuredArguments.kv;
+
 import com.github.johnjaysonlpz.dockerpolyglotlab.javaspringboot.config.ServiceProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,7 +21,6 @@ public class JavaSpringbootApplication {
     private static final Logger log = LoggerFactory.getLogger(JavaSpringbootApplication.class);
 
     public static void main(String[] args) {
-        log.info("bootstrapping_application");
         SpringApplication.run(JavaSpringbootApplication.class, args);
     }
 
@@ -35,28 +36,22 @@ public class JavaSpringbootApplication {
                 ? "default"
                 : String.join(",", profiles);
 
-            log.info(
-                "starting_server service={} version={} buildTime={} addr=0.0.0.0:{} profiles={}",
-                props.getServiceName(),
-                props.getVersion(),
-                props.getBuildTime(),
-                port,
-                activeProfiles
+            log.info("starting_server",
+                kv("service", props.getServiceName()),
+                kv("version", props.getVersion()),
+                kv("buildTime", props.getBuildTime()),
+                kv("addr", "0.0.0.0:" + port),
+                kv("profiles", activeProfiles)
             );
         };
     }
 
     @Bean
-    ApplicationListener<ContextClosedEvent> applicationShutdownLogger(
-        ServiceProperties props
-    ) {
-        return event -> {
-            log.info(
-                "server_shutdown_complete service={} version={} buildTime={}",
-                props.getServiceName(),
-                props.getVersion(),
-                props.getBuildTime()
-            );
-        };
+    ApplicationListener<ContextClosedEvent> applicationShutdownLogger(ServiceProperties props) {
+        return event -> log.info("server_shutdown_complete",
+            kv("service", props.getServiceName()),
+            kv("version", props.getVersion()),
+            kv("buildTime", props.getBuildTime())
+        );
     }
 }
