@@ -2,7 +2,6 @@ package com.github.johnjaysonlpz.dockerpolyglotlab.javaspringboot.web;
 
 import java.util.Map;
 
-import com.github.johnjaysonlpz.dockerpolyglotlab.javaspringboot.config.ReadinessStateHolder;
 import com.github.johnjaysonlpz.dockerpolyglotlab.javaspringboot.config.ServiceProperties;
 import org.springframework.boot.availability.ApplicationAvailability;
 import org.springframework.boot.availability.LivenessState;
@@ -17,16 +16,13 @@ public class InfraController {
 
     private final ServiceProperties props;
     private final ApplicationAvailability availability;
-    private final ReadinessStateHolder readinessStateHolder;
 
     public InfraController(
         ServiceProperties props,
-        ApplicationAvailability availability,
-        ReadinessStateHolder readinessStateHolder
+        ApplicationAvailability availability
     ) {
         this.props = props;
         this.availability = availability;
-        this.readinessStateHolder = readinessStateHolder;
     }
 
     @GetMapping("/")
@@ -54,7 +50,7 @@ public class InfraController {
 
     @GetMapping("/ready")
     public ResponseEntity<Void> ready() {
-        ReadinessState state = readinessStateHolder.getState();
+        ReadinessState state = availability.getReadinessState();
         HttpStatus status = (state == ReadinessState.ACCEPTING_TRAFFIC)
             ? HttpStatus.OK
             : HttpStatus.SERVICE_UNAVAILABLE;

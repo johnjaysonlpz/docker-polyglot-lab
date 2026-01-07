@@ -4,21 +4,35 @@ global:
 
 scrape_configs:
   - job_name: "golang-gin-app"
+    metrics_path: /metrics
     static_configs:
       - targets: ["golang-gin-app:8080"]
+        labels:
+          service: golang-gin-app
 
   - job_name: "java-springboot-app"
+    metrics_path: /metrics
     static_configs:
       - targets: ["java-springboot-app:8080"]
+        labels:
+          service: java-springboot-app
 
   - job_name: "python-django-app"
+    metrics_path: /metrics
     static_configs:
       - targets: ["python-django-app:8080"]
+        labels:
+          service: python-django-app
 
   - job_name: "prometheus"
     static_configs:
       - targets: ["prometheus:9090"]
+        labels:
+          service: prometheus
 
   - job_name: "grafana"
+    metrics_path: /metrics
     static_configs:
       - targets: ["grafana:3000"]
+        labels:
+          service: grafana

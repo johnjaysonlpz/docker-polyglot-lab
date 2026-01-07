@@ -1,13 +1,20 @@
 # VCS
 .git
 .gitignore
+.gitattributes
+.github/
 
 # IDE / editor
-.vscode
-.idea
+.vscode/
+.idea/
 *.code-workspace
 *.swp
 *.swo
+
+# Local env / secrets (never needed to build the binary)
+.env
+.env.*
+*.local
 
 # Build artifacts / test outputs
 bin/
@@ -20,9 +27,13 @@ coverage*.out
 # Logs
 *.log
 
-# Dependencies (only if you don't use go mod vendor in the image)
+# Dependencies (only if you don't vendor in-image)
 vendor/
 
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Optional: docs not required for build context
+README.md
+docs/

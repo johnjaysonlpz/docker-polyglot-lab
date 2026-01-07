@@ -113,6 +113,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	t.Setenv("READ_HEADER_TIMEOUT", "")
 	t.Setenv("IDLE_TIMEOUT", "")
 	t.Setenv("SHUTDOWN_TIMEOUT", "")
+	t.Setenv("TRUSTED_PROXIES", "")
 
 	const (
 		serviceName = "golang-gin-app"
@@ -170,6 +171,7 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	t.Setenv("READ_HEADER_TIMEOUT", "500ms")
 	t.Setenv("IDLE_TIMEOUT", "10s")
 	t.Setenv("SHUTDOWN_TIMEOUT", "7s")
+	t.Setenv("TRUSTED_PROXIES", "10.0.0.0/8,172.16.0.0/12")
 
 	cfg := LoadConfig("svc-name", "vX", "buildX")
 
@@ -202,6 +204,9 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	}
 	if cfg.ServiceName != "svc-name" || cfg.Version != "vX" || cfg.BuildTime != "buildX" {
 		t.Fatalf("unexpected service metadata: %+v", cfg)
+	}
+	if len(cfg.TrustedProxies) != 2 {
+		t.Fatalf("expected 2 trusted proxies, got %v", cfg.TrustedProxies)
 	}
 }
 
@@ -286,6 +291,44 @@ func TestMetricsRouteExists(t *testing.T) {
 	}
 }
 
+func TestRequestIDMiddlewareGeneratesHeaderWhenMissing(t *testing.T) {
+	cfg := newTestConfig()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	metrics := NewMetrics(cfg)
+	r := SetupRouter(cfg, logger, metrics)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", RootPath, nil)
+	r.ServeHTTP(w, req)
+
+	got := w.Header().Get(requestIDHeader)
+	if got == "" {
+		t.Fatalf("expected %s header to be set, got empty", requestIDHeader)
+	}
+}
+
+func TestUnmatchedRouteUsesStableMetricsLabel(t *testing.T) {
+	cfg := newTestConfig()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	metrics := NewMetrics(cfg)
+	r := SetupRouter(cfg, logger, metrics)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/does-not-exist", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, w.Code)
+	}
+
+	count := testutil.ToFloat64(
+		metrics.HTTPRequestsTotal.WithLabelValues(cfg.ServiceName, "GET", unmatchedRouteLabel, "404"),
+	)
+	if count != 1 {
+		t.Fatalf("expected 404 metrics count 1 for %s, got %v", unmatchedRouteLabel, count)
+	}
+}
+
 func TestGinSlogMiddlewareSkipsInfraEndpoints(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -298,15 +341,9 @@ func TestGinSlogMiddlewareSkipsInfraEndpoints(t *testing.T) {
 	r := gin.New()
 	r.Use(GinSlogMiddleware(logger, cfg, metrics))
 
-	r.GET(LivenessPath, func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
-	r.GET(ReadinessPath, func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
-	r.GET(MetricsPath, func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
+	r.GET(LivenessPath, func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET(ReadinessPath, func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET(MetricsPath, func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	for _, path := range []string{LivenessPath, ReadinessPath, MetricsPath} {
 		buf.Reset()

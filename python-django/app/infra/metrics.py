@@ -32,16 +32,16 @@ BUILD_INFO = Gauge(
 )
 
 BUILD_INFO.labels(
-    service=settings.APP_SERVICE_NAME,
-    version=settings.APP_VERSION,
-    build_time=settings.APP_BUILD_TIME,
+    service=settings.SERVICE_NAME,
+    version=settings.VERSION,
+    build_time=settings.BUILD_TIME,
 ).set(1)
 
 
 def record_http_request(method: str, path: str, status_code: int, duration_seconds: float) -> None:
     status = str(status_code)
     labels = {
-        "service": settings.APP_SERVICE_NAME,
+        "service": settings.SERVICE_NAME,
         "method": method,
         "path": path,
         "status": status,
