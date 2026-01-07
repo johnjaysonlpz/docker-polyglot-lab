@@ -3,7 +3,6 @@
 A small, production-style HTTP service built with **Go** and **Gin**, designed as the Go/Gin component of the `docker-polyglot-lab` project.
 
 This service focuses on **operational concerns** rather than business logic:
-
 - Health & readiness endpoints
 - Structured JSON logging with `slog`
 - Request correlation via `X-Request-ID` (logged as `request_id`)
@@ -18,7 +17,6 @@ This service focuses on **operational concerns** rather than business logic:
 ## Quick start
 
 ### Prerequisites
-
 - Go **1.25+**
 - Docker (optional, for containerized runs)
 
@@ -164,7 +162,6 @@ curl http://localhost:8081/metrics
 ## Observability
 
 ### Request correlation (`X-Request-ID`)
-
 - If the client sends `X-Request-ID`, the service reuses it
 - Otherwise, the service generates a new ID
 - The value is always returned in the response header `X-Request-ID`
@@ -223,7 +220,6 @@ Configuration is driven by environment variables and validated on startup (`Conf
 | `TRUSTED_PROXIES`     | (empty)   | Comma-separated list of trusted proxy IPs/CIDRs           |
 
 Validation rules include:
-
 - `GIN_MODE` must be one of `debug`, `release`, `test`
 - `HOST` must not be empty
 - `PORT` must be a valid TCP port (1–65535)
@@ -240,7 +236,6 @@ export TRUSTED_PROXIES="10.0.0.0/8,172.16.0.0/12"
 ### Build metadata
 
 Build metadata is passed at link time and surfaced via `/info` and log records:
-
 - `ServiceName` (default: `golang-gin-app`)
 - `Version` (default: `0.0.0-dev`)
 - `BuildTime` (default: `unknown`)

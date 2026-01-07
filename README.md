@@ -6,13 +6,11 @@
 A **polyglot microservice lab** focused on *operational excellence* rather than business logic.
 
 Three minimal HTTP services (**same endpoints, same observability contract**), each in a different stack:
-
 - **Go 1.25.4 + Gin 1.11.0** (`golang-gin/`)
 - **Java 21 + Spring Boot 3.5.8** (`java-springboot/`)
 - **Python 3.12 + Django 5.2.9 + Gunicorn 23.0.0** (`python-django/`)
 
 All three expose the same HTTP API:
-
 - `/`        – banner
 - `/info`    – build/service metadata
 - `/health`  – liveness probe
@@ -22,7 +20,6 @@ All three expose the same HTTP API:
 Everything is wired to run **locally with Docker Compose** in **dev / integration / prod-like** environments, with **Prometheus** scraping all services and **Grafana** provisioned for dashboards.
 
 This repo is designed to showcase:
-
 - Multi-stage Dockerfiles, non-root containers, healthchecks
 - Environment-specific Docker Compose (dev / int / prod)
 - Structured JSON logging (true JSON fields, not string-parsed messages)
@@ -40,7 +37,6 @@ This repo is designed to showcase:
 ## Components
 
 ### 1) Go + Gin — `golang-gin/`
-
 - Lightweight HTTP service using `gin-gonic/gin`
 - Structured JSON logging (stdout)
 - Prometheus metrics via `prometheus/client_golang`
@@ -52,7 +48,6 @@ See: [`golang-gin/README.md`](./golang-gin/README.md)
 ---
 
 ### 2) Java + Spring Boot — `java-springboot/`
-
 - Spring Boot 3.5.x, Java 21
 - Structured JSON logging (stdout)
 - Micrometer + Prometheus registry (`/metrics`)
@@ -65,7 +60,6 @@ See: [`java-springboot/README.md`](./java-springboot/README.md)
 ---
 
 ### 3) Python + Django — `python-django/`
-
 - Django (minimal settings) + Gunicorn runtime
 - Structured JSON logging with `python-json-logger` (real fields)
 - Request correlation (`X-Request-ID`) stored as `request_id` on log records
@@ -80,7 +74,6 @@ See: [`python-django/README.md`](./python-django/README.md)
 ### 4) Docker / Compose / Prometheus / Grafana — `docker/`
 
 This directory contains:
-
 - `compose.dev.yml` – dev: three services only
 - `compose.int.yml` – integration: three services + Prometheus + Grafana, builds with tests
 - `compose.prod.yml` – prod-like: pre-built images + Prometheus + Grafana
@@ -123,7 +116,6 @@ docker compose -f compose.dev.yml up --build
 ```
 
 Endpoints:
-
 - Gin: `http://localhost:8081`
 - Spring Boot: `http://localhost:8082`
 - Django: `http://localhost:8083`
@@ -190,39 +182,53 @@ docker compose -f compose.prod.yml down
 
 ## Observability contract (shared across all services)
 
-### Request correlation (`X-Request-ID`)
-- If the client sends `X-Request-ID`, the service reuses it.
-- Otherwise, the service generates one.
-- The value is returned in the response header `X-Request-ID`.
-- Logs include the correlated field `request_id` for easy tracing.
+This lab treats observability as an API contract. Each service must follow these rules so dashboards/alerts stay portable across stacks.
 
-Example:
+### Metrics
 
-```bash
-curl -i -H "X-Request-ID: demo-123" http://localhost:8083/info
-```
+All services expose Prometheus metrics on `GET /metrics`.
 
-### Metrics (Prometheus)
-
-All services export Prometheus metrics on `/metrics`, including:
+Required metric families:
 - `http_requests_total{service,method,path,status,...}`
 - `http_request_duration_seconds{service,method,path,status,...}`
 - `build_info{service,version,build_time}`
 
-Prometheus adds a consistent `service` label at scrape-time so dashboards don’t depend
-on language-specific instrumentation to supply `service`.
+Label rules
+- `service` must be present on all HTTP metrics.
+  - In this repo, Prometheus adds `service` at scrape-time, so dashboards don’t depend on language-specific instrumentation.
+- `path` must be stable:
+  - Matched routes use a route template label (not raw URL paths).
+  - Unmatched routes (404s) use `path="__unmatched__"` to prevent cardinality blowups.
+  - Raw paths belong in logs (`rawPath`), not as a metric label.
 
-**Important**: `path` is kept stable:
-- matched routes use a route template label
-- 404s use `path="__unmatched__"` to prevent cardinality blowups
-- raw paths (debuggable) live in logs, not metric labels
+### Logging
 
-### Logging (structured JSON)
+All services log to stdout as **structured JSON** with request correlation.
 
-- Logs go to stdout as JSON with true fields (queryable in Loki/ELK)
-- HTTP access logs are unified as an `"http_request"` event (or equivalent)
-- Infra endpoints (`/health`, `/ready`, `/metrics`) are not access-logged to reduce noise
-(but are still counted in metrics)
+Minimum recommended HTTP access-log fields:
+- `message` / event name (e.g. `http_request`)
+- `service`, `version`, `buildTime`
+- `request_id`
+- `method`, `path`, `status`
+- `latencyMs`
+- `ip`, `userAgent`
+- (optional) `rawPath`, `query`
+
+Severity guidance:
+- `2xx/3xx` → `INFO`
+- `4xx` → `WARNING`
+- `5xx` → `ERROR`
+
+Noise rule:
+- Infra endpoints (`/health`, `/ready`, `/metrics`) are **not** access-logged (but still counted in metrics).
+
+### Intentionally out of scope
+This repo intentionally does not include:
+- AuthN/AuthZ, sessions, API keys, OAuth
+- Database persistence / migrations
+- Distributed tracing (OpenTelemetry), service mesh, log shipping
+- Rate limiting / WAF / caching layers
+- Kubernetes manifests / Helm (Compose-only for the lab)
 
 ---
 

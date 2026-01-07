@@ -3,7 +3,6 @@
 A small, production-style HTTP service built with **Java 21** and **Spring Boot 3.5.x**, designed as the Spring Boot component of the `docker-polyglot-lab` project.
 
 This service focuses on **operational concerns** rather than business logic:
-
 - Health & readiness endpoints
 - Structured JSON logging (Logback + logstash encoder)
 - Request correlation via `X-Request-ID` (stored in MDC as `request_id`)
@@ -18,7 +17,6 @@ This service focuses on **operational concerns** rather than business logic:
 ## Quick start
 
 ### Prerequisites
-
 - Java **21**
 - Maven **3.9+**
 - Docker (optional, for containerized runs)
@@ -167,7 +165,6 @@ curl -i -H "X-Request-ID: demo-123" http://localhost:8082/info
 ### Structured logging
 
 Logging is configured for consistent JSON output:
-
 - Logback emits JSON to stdout
 - `LOG_LEVEL` is honored (root level is not hardcoded)
 - Spring banner is disabled for cleaner logs
@@ -219,19 +216,16 @@ This maps cleanly to AWS ALB / reverse proxy deployments.
 ### Prometheus metrics (Micrometer)
 
 Metrics are implemented via Micrometer + Prometheus:
-
 - `io.micrometer:micrometer-registry-prometheus`
 - `PrometheusMeterRegistry` wired in `MetricsConfiguration`
 - Metrics scraped via `/metrics` (see `MetricsController`)
 
 Key metrics:
-
 - `http_requests_total{service,method,path,status}` (counter)
 - `http_request_duration_seconds{service,method,path,status}` (timer + histogram)
 - `build_info{service,version,build_time}` (gauge with value `1`)
 
 For unknown routes, metrics use a stable label:
-
 - `path="__unmatched__"` (raw paths are never used in metrics)
 
 Note: Spring may provide a handler pattern like `/**` for some 404s; the filter normalizes those to `__unmatched__` for metrics and logs.
@@ -241,7 +235,6 @@ Note: Spring may provide a handler pattern like `/**` for some 404s; the filter 
 ## Configuration
 
 Configuration uses Spring Boot’s externalized configuration with:
-
 - `@ConfigurationProperties(prefix = "app")` via `ServiceProperties`
 - Defaults defined in `ServiceProperties` and `application.yaml`
 - Validation via Jakarta Bean Validation (`@NotBlank`, `@Min`, `@Max`, `@DurationMin`)
@@ -262,7 +255,6 @@ Backed by `ServiceProperties`:
 | `app.shutdown-timeout` | `5s`                  | Graceful shutdown timeout (used via lifecycle) |
 
 Environment variables map using Spring’s relaxed binding, e.g.:
-
 - `SERVICE_NAME` → `app.service-name`
 - `VERSION` → `app.version`
 - `BUILD_TIME` → `app.build-time`
@@ -277,7 +269,6 @@ Environment variables map using Spring’s relaxed binding, e.g.:
 ## `.env` profiles
 
 The project includes environment files for convenience:
-
 - `.env.dev` – local development (DEBUG, short timeouts)
 - `.env.int` – integration / prod-like
 - `.env.prod` – production baseline
@@ -316,6 +307,7 @@ Coverage includes:
 - Stable 404 metrics label (`HttpMetricsUnmatchedTest` asserts `path="__unmatched__"`)
 
 Docker build can run or skip tests:
+
 ```bash
 docker build --build-arg RUN_TESTS=true -t java-springboot-app:test .
 docker build --build-arg RUN_TESTS=false -t java-springboot-app:fast .

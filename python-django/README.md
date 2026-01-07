@@ -3,7 +3,6 @@
 A small, production-style HTTP service built with **Python 3.12**, **Django**, and **Gunicorn**, designed as the Django component of the `docker-polyglot-lab` project.
 
 This service focuses on **operational concerns** rather than business logic:
-
 - Health & readiness endpoints
 - Structured JSON logging via `python-json-logger` (true fields, not string-parsed)
 - Request correlation via `X-Request-ID` (stored as `request_id` for all logs)
@@ -20,7 +19,6 @@ This service focuses on **operational concerns** rather than business logic:
 ## Quick start
 
 ### Prerequisites
-
 - Python **3.12**
 - `pip` and `virtualenv` (or the built-in `venv` module)
 - Docker (optional, for containerized runs)
@@ -137,7 +135,6 @@ Infra startup log (note `process`/`threadName` and request id placeholder):
 ```
 
 The resulting image:
-
 - Uses `python:3.12-alpine` as runtime
 - Includes only curl + CA certs and a dedicated virtualenv
 - Runs as non-root user `appuser` (UID 10001)
@@ -176,7 +173,6 @@ The readiness behavior is controlled by `infra.readiness.state`, which can be to
 ## Observability
 
 ### Request correlation (`X-Request-ID`)
-
 - If the client sends `X-Request-ID`, the service reuses it
 - Otherwise, the service generates one
 - The value is always returned in the response header `X-Request-ID`
@@ -335,7 +331,6 @@ curl http://localhost:8083/info
 ## `.env` profiles
 
 The project includes environment files for convenience:
-
 - `.env.dev` – local development (DEBUG, short timeouts)
 - `.env.int` – integration / prod-like
 - `.env.prod` – production baseline
@@ -372,7 +367,6 @@ GUNICORN_GRACEFUL_TIMEOUT=5
 ## Testing
 
 Tests live in `infra/tests.py` and cover:
-
 - Infra endpoints:
   - `/`, `/info`, `/health`, `/ready`, `/metrics`
   - Readiness state behavior (`/ready` → `503` when not accepting)
@@ -380,7 +374,6 @@ Tests live in `infra/tests.py` and cover:
   - Incoming `X-Request-ID` is echoed back
 
 - HTTP logging & metrics middleware:
-
   - Infra endpoints record metrics but do not log access lines
   - Application endpoints produce `http_request` logs with structured fields
   - 404s use stable metrics label: `path="__unmatched__"`

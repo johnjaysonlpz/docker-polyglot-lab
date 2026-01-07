@@ -2,7 +2,6 @@
 
 This directory contains **Docker Compose** definitions and **Prometheus / Grafana** configuration
 for running the polyglot lab in different environments:
-
 - `compose.dev.yml` – local dev (apps only)
 - `compose.int.yml` – integration / prod-like (apps + Prometheus + Grafana, builds with tests)
 - `compose.prod.yml` – production-like (pre-built images + Prometheus + Grafana)
@@ -53,7 +52,6 @@ docker compose -f compose.dev.yml up --build
 ```
 
 Services:
-
 - Go + Gin: `http://localhost:8081`
 - Spring Boot: `http://localhost:8082`
 - Django: `http://localhost:8083`
@@ -69,7 +67,6 @@ docker compose -f compose.dev.yml down
 ## Integration environment (apps + Prometheus + Grafana, tests on build)
 
 Integration runs:
-
 - Integration runs:
 - Prometheus with a persistent data volume
 - Grafana provisioned with a Prometheus datasource and a dashboard
@@ -81,7 +78,6 @@ BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
 ```
 
 Services:
-
 - Gin: `http://localhost:8081`
 - Spring Boot: `http://localhost:8082`
 - Django: `http://localhost:8083`
@@ -89,7 +85,6 @@ Services:
 - Grafana UI: `http://localhost:3000`
 
 Grafana credentials (defaults):
-
 - user: `admin`
 - pass: `admin`
 
@@ -149,7 +144,6 @@ Key idea:
 ```
 
 Prometheus scrapes:
-
 - `golang-gin-app:8080` (`/metrics`)
 - `java-springboot-app:8080` (`/metrics`)
 - `python-django-app:8080` (/`metrics`)
@@ -157,7 +151,6 @@ Prometheus scrapes:
 - `grafana:3000` (`/metrics`)
 
 Example queries in Prometheus UI:
-
 - `http_requests_total`
 - `http_request_duration_seconds_bucket`
 - `build_info`
@@ -173,7 +166,6 @@ docker compose -f compose.int.yml up --build
 ```
 
 Docker will create (names are prefixed by the Compose project name):
-
 - Network: `polyglot-net`
 - Volumes: `prometheus-data`, `grafana-data`
 
