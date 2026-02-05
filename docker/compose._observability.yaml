@@ -1,0 +1,208 @@
+x-net: &net
+  networks: [polyglot-net]
+
+x-obs-hardening: &obs_hardening
+  read_only: true
+  tmpfs:
+    - /tmp
+    - /run
+  security_opt:
+    - no-new-privileges:true
+
+x-hc-obs-slow: &hc_obs_slow
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 20s
+
+x-hc-obs-fast: &hc_obs_fast
+  interval: 10s
+  timeout: 10s
+  retries: 30
+  start_period: 2m
+
+services:
+  loki-init:
+    <<: *net
+    image: busybox:1.37.0-musl
+    command:
+      - "sh"
+      - "-c"
+      - "mkdir -p /var/loki/chunks /var/loki/rules && chown -R 10001:10001 /var/loki"
+    volumes:
+      - loki-data:/var/loki
+    restart: "no"
+
+  tempo-init:
+    <<: *net
+    image: busybox:1.37.0-musl
+    command:
+      - "sh"
+      - "-c"
+      - "mkdir -p /var/tempo/traces /var/tempo/generator/wal /var/tempo/generator/traces && chown -R 10001:10001 /var/tempo"
+    volumes:
+      - tempo-data:/var/tempo
+    restart: "no"
+
+  alertmanager:
+    <<: [*net, *obs_hardening]
+    image: prom/alertmanager:v0.31.0
+    entrypoint:
+      - "/bin/sh"
+      - "/etc/alertmanager/entrypoint.sh"
+    command:
+      - "--config.file=/tmp/alertmanager.yaml"
+      - "--storage.path=/alertmanager"
+      - "--log.level=${ALERTMANAGER_LOG_LEVEL:-info}"
+    environment:
+      APP_ENV: "${APP_ENV:-integration}"
+      ALERTMANAGER_LOG_LEVEL: "${ALERTMANAGER_LOG_LEVEL:-info}"
+    volumes:
+      - alertmanager-data:/alertmanager
+      - ./alertmanager/alertmanager.yaml.tpl:/etc/alertmanager/alertmanager.yaml.tpl:ro
+      - ./alertmanager/entrypoint.sh:/etc/alertmanager/entrypoint.sh:ro
+      - ./alertmanager/templates:/etc/alertmanager/templates:ro
+      - toolbox:/tools:ro
+    ports:
+      - "127.0.0.1:9093:9093"
+    depends_on:
+      toolbox-init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *hc_obs_slow
+      test: ["CMD", "/tools/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9093/-/healthy"]
+    restart: unless-stopped
+
+  alloy:
+    <<: [*net, *obs_hardening]
+    image: grafana/alloy:v1.12.2
+    command:
+      - "run"
+      - "--server.http.listen-addr=0.0.0.0:12345"
+      - "--storage.path=/var/lib/alloy/data"
+      - "/etc/alloy/config.alloy"
+    volumes:
+      - alloy-data:/var/lib/alloy/data
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - toolbox:/tools:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:12345:12345"
+    depends_on:
+      toolbox-init:
+        condition: service_completed_successfully
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    healthcheck:
+      <<: *hc_obs_fast
+      test: ["CMD", "/tools/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:12345/-/ready"]
+    restart: unless-stopped
+
+  grafana:
+    <<: [*net, *obs_hardening]
+    image: grafana/grafana:12.3.2
+    environment:
+      GF_LOG_LEVEL: ${GRAFANA_LOG_LEVEL:-info}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_METRICS_ENABLED: "true"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - toolbox:/tools:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      toolbox-init:
+        condition: service_completed_successfully
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+      alloy:
+        condition: service_healthy
+    healthcheck:
+      <<: *hc_obs_slow
+      test: ["CMD", "/tools/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+    restart: unless-stopped
+
+  loki:
+    <<: [*net, *obs_hardening]
+    image: grafana/loki:3.6.4
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - loki-data:/var/loki
+      - ./loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - toolbox:/tools:ro
+    ports:
+      - "127.0.0.1:3100:3100"
+    depends_on:
+      toolbox-init:
+        condition: service_completed_successfully
+      loki-init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *hc_obs_fast
+      test: ["CMD", "/tools/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/ready"]
+    restart: unless-stopped
+
+  prometheus:
+    <<: [*net, *obs_hardening]
+    image: prom/prometheus:v3.9.1
+    entrypoint:
+      - "/bin/sh"
+      - "/etc/prometheus/entrypoint.sh"
+    command:
+      - "--config.file=/tmp/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-remote-write-receiver"
+      - "--web.external-url=${PROMETHEUS_EXTERNAL_URL:-http://127.0.0.1:9090}"
+      - "--log.level=${PROMETHEUS_LOG_LEVEL:-info}"
+    environment:
+      APP_ENV: "${APP_ENV:-integration}"
+      PROMETHEUS_LOG_LEVEL: "${PROMETHEUS_LOG_LEVEL:-info}"
+    volumes:
+      - prometheus-data:/prometheus
+      - ./prometheus/prometheus.yaml.tpl:/etc/prometheus/prometheus.yml.tpl:ro
+      - ./prometheus/entrypoint.sh:/etc/prometheus/entrypoint.sh:ro
+      - ./prometheus/alerts.yaml:/etc/prometheus/alerts.yaml:ro
+      - toolbox:/tools:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      toolbox-init:
+        condition: service_completed_successfully
+      alertmanager:
+        condition: service_healthy
+    healthcheck:
+      <<: *hc_obs_slow
+      test: ["CMD", "/tools/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/healthy"]
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+  tempo:
+    <<: [*net, *obs_hardening]
+    image: grafana/tempo:2.10.0
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - tempo-data:/var/tempo
+      - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - toolbox:/tools:ro
+    ports:
+      - "127.0.0.1:3200:3200"
+    depends_on:
+      toolbox-init:
+        condition: service_completed_successfully
+      tempo-init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *hc_obs_fast
+      test: ["CMD", "/tools/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3200/ready"]
+    stop_grace_period: 30s
+    restart: unless-stopped

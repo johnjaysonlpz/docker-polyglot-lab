@@ -14,7 +14,6 @@ func NewLogger(level slog.Level) (*slog.Logger, *log.Logger) {
 	handler := slog.NewJSONHandler(os.Stdout, handlerOpts)
 
 	slogger := slog.New(handler)
-
 	stdLogger := slog.NewLogLogger(handler, slog.LevelError)
 
 	return slogger, stdLogger

@@ -1,0 +1,135 @@
+groups:
+  - name: polyglot-lab-apps
+    interval: 30s
+    rules:
+      - alert: ServiceDown
+        expr: up{job=~"golang-gin-app|java-springboot-app|python-django-app"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service down: {{ $labels.job }}"
+          description: "Prometheus cannot scrape {{ $labels.job }} for > 2m."
+          runbook_url: ""
+
+      - alert: ReadinessFailing
+        expr: |
+          sum by (job) (
+            rate(http_requests_total{
+              job=~"golang-gin-app|java-springboot-app|python-django-app",
+              path="/ready",
+              status="503"
+            }[2m])
+          ) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Readiness failing: {{ $labels.job }}"
+          description: "/ready is returning 503s for > 2m."
+          runbook_url: ""
+
+      - alert: ScrapeMetricsFailing
+        expr: |
+          avg_over_time(scrape_samples_scraped{job=~"golang-gin-app|java-springboot-app|python-django-app"}[5m]) == 0
+          and on(job) up{job=~"golang-gin-app|java-springboot-app|python-django-app"} == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scrape metrics failing: {{ $labels.job }}"
+          description: "Target is up but Prometheus is scraping 0 samples for 5m (possible /metrics error or auth/content-type issue)."
+          runbook_url: ""
+
+      - alert: High4xxRate
+        expr: |
+          100
+          * sum by(job) (
+              rate(http_requests_total{
+                job=~"golang-gin-app|java-springboot-app|python-django-app",
+                path!~"^/(health|ready|metrics)$",
+                status=~"4.."
+              }[5m])
+            )
+          / clamp_min(
+              sum by(job) (
+                rate(http_requests_total{
+                  job=~"golang-gin-app|java-springboot-app|python-django-app",
+                  path!~"^/(health|ready|metrics)$"
+                }[5m])
+              ),
+              1e-9
+            )
+          > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 4xx rate: {{ $labels.job }}"
+          description: "4xx rate > 5% for 10m (infra endpoints excluded)."
+          runbook_url: ""
+
+      - alert: High5xxRate
+        expr: |
+          100
+          * sum by(job) (
+              rate(http_requests_total{
+                job=~"golang-gin-app|java-springboot-app|python-django-app",
+                path!~"^/(health|ready|metrics)$",
+                status=~"5.."
+              }[5m])
+            )
+          / clamp_min(
+              sum by(job) (
+                rate(http_requests_total{
+                  job=~"golang-gin-app|java-springboot-app|python-django-app",
+                  path!~"^/(health|ready|metrics)$"
+                }[5m])
+              ),
+              1e-9
+            )
+          > 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High 5xx rate: {{ $labels.job }}"
+          description: "5xx rate > 1% for 5m (infra endpoints excluded)."
+          runbook_url: ""
+
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, job) (
+              rate(http_request_duration_seconds_bucket{
+                job=~"golang-gin-app|java-springboot-app|python-django-app",
+                path!~"^/(health|ready|metrics)$"
+              }[5m])
+            )
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency p95: {{ $labels.job }}"
+          description: "p95 latency > 0.5s for 10m (infra endpoints excluded)."
+          runbook_url: ""
+
+      - alert: NoTraffic
+        expr: |
+          sum by(job) (
+            rate(http_requests_total{
+              job=~"golang-gin-app|java-springboot-app|python-django-app",
+              path!~"^/(health|ready|metrics)$"
+            }[5m])
+          ) < 0.001
+          and on(job)
+          up{job=~"golang-gin-app|java-springboot-app|python-django-app"} == 1
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "No traffic: {{ $labels.job }}"
+          description: "Service is up but seeing near-zero request rate for 15m."
+          runbook_url: ""

@@ -1,0 +1,63 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - unconvert
+    - misspell
+    - thelper
+    - gocritic
+    - prealloc
+    - nilerr
+    - forcetypeassert
+    - gosec
+    - revive
+    - gocyclo
+    - dupl
+
+  settings:
+    govet:
+      enable-all: false
+
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (*net/http.Response).Body.Close
+        - (*os.File).Close
+        - (go.opentelemetry.io/otel/sdk/trace.TracerProvider).Shutdown
+        - (go.opentelemetry.io/otel/sdk/trace.BatchSpanProcessor).Shutdown
+
+    gosec:
+      severity: medium
+      confidence: medium
+
+    gocyclo:
+      min-complexity: 15
+
+    dupl:
+      threshold: 120
+
+  exclusions:
+    rules:
+      - path: '(.+)_test\.go'
+        linters: [errcheck, bodyclose, gosec]
+
+      - linters: [gosec]
+        text: '^G104:'
+
+      - linters: [revive]
+        text: '^package-comments:'
+
+      - linters: [revive]
+        text: '^exported:'
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

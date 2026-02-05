@@ -1,67 +1,100 @@
 package com.github.johnjaysonlpz.dockerpolyglotlab.javaspringboot.web;
 
-import org.junit.jupiter.api.BeforeEach;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import com.github.johnjaysonlpz.dockerpolyglotlab.javaspringboot.config.ServiceProperties;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.availability.AvailabilityChangeEvent;
+import org.springframework.boot.availability.ApplicationAvailability;
+import org.springframework.boot.availability.LivenessState;
 import org.springframework.boot.availability.ReadinessState;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.ApplicationContext;
-import org.springframework.http.MediaType;
-import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 
-import static org.hamcrest.Matchers.is;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-
-@SpringBootTest
-@AutoConfigureMockMvc
 class InfraControllerTest {
 
-    @Autowired
-    MockMvc mockMvc;
+  @Test
+  void root_returnsOkMessage() {
+    ServiceProperties props = mock(ServiceProperties.class);
+    ApplicationAvailability availability = mock(ApplicationAvailability.class);
+    InfraController c = new InfraController(props, availability);
 
-    @Autowired
-    ApplicationContext context;
+    ResponseEntity<String> res = c.root();
 
-    @BeforeEach
-    void resetReadiness() {
-        AvailabilityChangeEvent.publish(context, ReadinessState.ACCEPTING_TRAFFIC);
-    }
+    assertThat(res.getStatusCode()).isEqualTo(HttpStatus.OK);
+    assertThat(res.getBody()).isEqualTo("java-springboot-app is running (Java + Spring Boot)\n");
+  }
 
-    @Test
-    void rootReturnsBanner() throws Exception {
-        mockMvc.perform(get("/"))
-            .andExpect(status().isOk())
-            .andExpect(content().string("java-springboot-app is running (Java + Spring Boot)\n"));
-    }
+  @Test
+  void info_returnsServiceVersionBuildTimeFromProps() {
+    ServiceProperties props = mock(ServiceProperties.class);
+    ApplicationAvailability availability = mock(ApplicationAvailability.class);
 
-    @Test
-    void healthAndReadyEndpointsRespondOk() throws Exception {
-        mockMvc.perform(get("/health"))
-            .andExpect(status().isOk());
+    when(props.getServiceName()).thenReturn("svc");
+    when(props.getVersion()).thenReturn("1.2.3");
+    when(props.getBuildTime()).thenReturn("2026-01-30T00:00:00Z");
 
-        mockMvc.perform(get("/ready"))
-            .andExpect(status().isOk());
-    }
+    InfraController c = new InfraController(props, availability);
 
-    @Test
-    void infoReturnsMetadata() throws Exception {
-        mockMvc.perform(get("/info").accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.service", is("java-springboot-app")))
-            .andExpect(jsonPath("$.version", is("0.0.0-dev")))
-            .andExpect(jsonPath("$.buildTime", is("unknown")));
-    }
+    Map<String, String> out = c.info();
 
-    @Test
-    void readyReturns503WhenRefusingTraffic() throws Exception {
-        AvailabilityChangeEvent.publish(context, ReadinessState.REFUSING_TRAFFIC);
+    assertThat(out)
+        .containsEntry("service", "svc")
+        .containsEntry("version", "1.2.3")
+        .containsEntry("build_time", "2026-01-30T00:00:00Z");
+  }
 
-        mockMvc.perform(get("/ready"))
-            .andExpect(status().isServiceUnavailable());
-    }
+  @Test
+  void health_whenLivenessCorrect_returns200() {
+    ServiceProperties props = mock(ServiceProperties.class);
+    ApplicationAvailability availability = mock(ApplicationAvailability.class);
+    when(availability.getLivenessState()).thenReturn(LivenessState.CORRECT);
+
+    InfraController c = new InfraController(props, availability);
+
+    ResponseEntity<Void> res = c.health();
+
+    assertThat(res.getStatusCode()).isEqualTo(HttpStatus.OK);
+  }
+
+  @Test
+  void health_whenLivenessNotCorrect_returns500() {
+    ServiceProperties props = mock(ServiceProperties.class);
+    ApplicationAvailability availability = mock(ApplicationAvailability.class);
+    when(availability.getLivenessState()).thenReturn(LivenessState.BROKEN);
+
+    InfraController c = new InfraController(props, availability);
+
+    ResponseEntity<Void> res = c.health();
+
+    assertThat(res.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+  }
+
+  @Test
+  void ready_whenAcceptingTraffic_returns200() {
+    ServiceProperties props = mock(ServiceProperties.class);
+    ApplicationAvailability availability = mock(ApplicationAvailability.class);
+    when(availability.getReadinessState()).thenReturn(ReadinessState.ACCEPTING_TRAFFIC);
+
+    InfraController c = new InfraController(props, availability);
+
+    ResponseEntity<Void> res = c.ready();
+
+    assertThat(res.getStatusCode()).isEqualTo(HttpStatus.OK);
+  }
+
+  @Test
+  void ready_whenNotAcceptingTraffic_returns503() {
+    ServiceProperties props = mock(ServiceProperties.class);
+    ApplicationAvailability availability = mock(ApplicationAvailability.class);
+    when(availability.getReadinessState()).thenReturn(ReadinessState.REFUSING_TRAFFIC);
+
+    InfraController c = new InfraController(props, availability);
+
+    ResponseEntity<Void> res = c.ready();
+
+    assertThat(res.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+  }
 }

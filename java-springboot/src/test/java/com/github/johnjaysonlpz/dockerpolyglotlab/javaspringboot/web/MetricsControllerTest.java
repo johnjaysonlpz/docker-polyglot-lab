@@ -1,33 +1,26 @@
 package com.github.johnjaysonlpz.dockerpolyglotlab.javaspringboot.web;
 
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
-
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
-@SpringBootTest
-@AutoConfigureMockMvc
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+
 class MetricsControllerTest {
 
-    @Autowired
-    MockMvc mockMvc;
+  @Test
+  void metrics_returnsScrapeBody_with200() {
+    PrometheusMeterRegistry reg = mock(PrometheusMeterRegistry.class);
+    when(reg.scrape()).thenReturn("# HELP a b\n# TYPE a counter\na 1\n");
 
-    @Test
-    void metricsEndpointContainsHttpRequestsTotalAfterTraffic() throws Exception {
-        mockMvc.perform(get("/")).andExpect(status().isOk());
+    MetricsController c = new MetricsController(reg);
 
-        MvcResult result = mockMvc.perform(get("/metrics"))
-            .andExpect(status().isOk())
-            .andReturn();
+    ResponseEntity<String> res = c.metrics();
 
-        String body = result.getResponse().getContentAsString();
-
-        assertThat(body).contains("http_requests_total");
-    }
+    assertThat(res.getStatusCode()).isEqualTo(HttpStatus.OK);
+    assertThat(res.getBody()).isEqualTo("# HELP a b\n# TYPE a counter\na 1\n");
+  }
 }

@@ -11,6 +11,7 @@
 *.iml
 .project
 .classpath
+.cache/
 .settings/
 .gradle/
 *.swp
@@ -34,11 +35,6 @@ out/
 # JVM crash / replay files
 hs_err_pid*
 replay_pid*
-
-# Maven wrapper (not needed since the builder image already has Maven)
-.mvn/
-mvnw
-mvnw.cmd
 
 # OS junk
 .DS_Store

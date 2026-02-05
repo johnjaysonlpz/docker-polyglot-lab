@@ -7,11 +7,8 @@ Thumbs.db
 #################################
 # IDEs / Editors
 #################################
-
-# VS Code
 .vscode/
 
-# IntelliJ / IDEA
 .idea/
 *.iws
 *.iml
@@ -27,64 +24,62 @@ Thumbs.db
 .sts4-cache/
 
 # NetBeans
-/nbproject/private/
-/nbbuild/
-/dist/
-/nbdist/
-/.nb-gradle/
+nbproject/private/
+nbbuild/
+dist/
+nbdist/
+.nb-gradle/
 
 #################################
-# Env / secrets (all stacks)
+# Env / secrets (repo-wide)
 #################################
 # Never commit real secrets
 .env
 .env.*
-!.env.dev
-!.env.int
-!.env.prod
+
+# Allowlist example envs (safe templates)
+!.ci-tool-versions.sh
+!.env.development
+!.env.integration
+!.env.staging
 
 # Common local-only variants
 *.env.local
 *.env.*.local
 
 #################################
-# Docker / Compose (repo-level)
+# Docker / Compose
 #################################
-# Local compose overrides
-docker-compose.override.yml
-compose.override.yml
+docker-compose.override.yaml
+compose.override.yaml
 
-# If you ever bind-mount these instead of named volumes
-docker/grafana/data/
-docker/prometheus/data/
+# Docker secrets
+docker/secrets/
+
+# Local bind-mount data (keep runtime data out of git)
+docker/**/data/
 
 #################################
 # Go (golang-gin/)
 #################################
-# Common local build outputs
 golang-gin/server
 golang-gin/*.test
 golang-gin/bin/
 golang-gin/dist/
-
-# Coverage outputs
 golang-gin/coverage.out
-coverage.out
+golang-gin/govulncheck.txt
 
 #################################
-# Java / Maven / Gradle (java-springboot/)
+# Java / Maven / Gradle
 #################################
-java-springboot/target/
 **/target/
-
-# Gradle (in case you add it later)
 .gradle/
 **/build/
+**/.cache/
 
 #################################
 # Python (python-django/)
 #################################
-
 # Bytecode / cache
 __pycache__/
 *.py[cod]
@@ -101,8 +96,11 @@ env*/
 build/
 dist/
 *.egg-info/
+.eggs/
+*.whl
+pip-wheel-metadata/
 
-# Test / coverage / tooling
+# Test / coverage / tooling caches
 .pytest_cache/
 .tox/
 .nox/
@@ -118,6 +116,11 @@ htmlcov/
 
 # Local DBs (SQLite, etc.)
 *.sqlite3
+
+# CI outputs / reports
+python-django/coverage.xml
+python-django/coverage.json
+python-django/pip-audit.json
 
 #################################
 # Logs

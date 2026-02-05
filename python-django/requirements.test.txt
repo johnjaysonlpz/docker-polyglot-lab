@@ -1,0 +1,9 @@
+pytest==9.0.2
+pytest-django==4.11.1
+pytest-cov==7.0.0
+
+ruff==0.15.0
+black==26.1.0
+
+mypy==1.19.1
+django-stubs[compatible-mypy]==5.2.9

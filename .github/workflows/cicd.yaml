@@ -1,0 +1,457 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ "v*" ]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  policy:
+    name: Policy - protect CI control files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Block PRs that modify CI control files
+        if: github.event_name == 'pull_request' && github.actor != 'johnjaysonlpz'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+
+          echo "Comparing $base...$head"
+          changed="$(git diff --name-only "$base...$head")"
+
+          protected_regex='^(\.ci-tool-versions\.sh|\.ci-local\.sh|\.github/workflows/.*\.ya?ml)$'
+
+          if echo "$changed" | grep -E "$protected_regex" >/dev/null; then
+            echo "ERROR: This PR modifies protected CI control files:"
+            echo "$changed" | grep -E "$protected_regex" || true
+            echo
+            echo "Please open a separate PR or request maintainer assistance."
+            exit 1
+          fi
+
+          echo "OK: no protected CI control files modified."
+
+  go:
+    name: Go / Gin - quality, tests, security
+    runs-on: ubuntu-latest
+    needs: [ policy ]
+    defaults:
+      run:
+        working-directory: golang-gin
+
+    env:
+      GOIMPORTS_VERSION: ""
+      GOVULNCHECK_VERSION: ""
+      GOLANGCI_LINT_VERSION: ""
+      GO_MODULE: ""
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6.0.0
+
+      - name: Load tool versions
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          test -f .ci-tool-versions.sh
+          cat .ci-tool-versions.sh >> "$GITHUB_ENV"
+
+      - name: Security - dependency review (PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+
+      - name: Setup - Go toolchain
+        uses: actions/setup-go@v6.0.0
+        with:
+          go-version-file: golang-gin/go.mod
+          cache-dependency-path: golang-gin/go.sum
+          check-latest: true
+
+      - name: Validate - go.mod/go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Setup - install Go dev tools (goimports, govulncheck)
+        shell: bash
+        run: |
+          go install "golang.org/x/tools/cmd/goimports@${GOIMPORTS_VERSION}"
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+
+          GOBIN="$(go env GOBIN)"
+          if [[ -z "$GOBIN" ]]; then
+            GOPATH_FIRST="$(go env GOPATH)"
+            GOPATH_FIRST="${GOPATH_FIRST%%:*}"
+            GOBIN="${GOPATH_FIRST}/bin"
+          fi
+          echo "$GOBIN" >> "$GITHUB_PATH"
+
+          command -v goimports
+          command -v govulncheck
+
+      - name: Quality - format/import checks (gofmt, goimports)
+        shell: bash
+        run: |
+          GO_DIRS="$(go list -f '{{.Dir}}' ./...)"
+
+          if [[ -n "$GO_DIRS" ]]; then
+            test -z "$(printf '%s\n' "$GO_DIRS" | xargs -r gofmt -l)"
+            test -z "$(printf '%s\n' "$GO_DIRS" | xargs -r goimports -l -local "${GO_MODULE}")"
+          fi
+
+      - name: Quality - lint (golangci-lint)
+        uses: golangci/golangci-lint-action@v9.0.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: golang-gin
+          args: --config=.golangci.yaml ./...
+
+      - name: Quality - static analysis (go vet)
+        run: |
+          go vet ./...
+
+      - name: Setup - system deps for race detector (CGO)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc libc6-dev
+
+      - name: Test - unit tests (race, shuffle) + coverage profile
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go test ./... -race -shuffle=on -count=1 \
+            -covermode=atomic -coverprofile=coverage.out
+
+      - name: Coverage - enforce 100% statements (Go)
+        run: |
+          python3 - <<'PY'
+          import re, subprocess, sys
+          out = subprocess.check_output(["go", "tool", "cover", "-func=coverage.out"], text=True)
+          m = re.search(r"total:\s*\(statements\)\s*([\d.]+)%", out)
+          if not m:
+              print("Could not parse total coverage from go tool cover output.", file=sys.stderr)
+              sys.exit(2)
+          pct = float(m.group(1))
+          print(f"Go total coverage: {pct:.1f}%")
+          sys.exit(0 if pct >= 100.0 else 1)
+          PY
+
+      - name: Artifact - upload coverage profile (coverage.out)
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-gin-coverage
+          path: golang-gin/coverage.out
+          if-no-files-found: error
+
+      - name: Security - vulnerability scan (govulncheck) (push/tags only)
+        if: github.event_name == 'push'
+        run: |
+          set -o pipefail
+          govulncheck -test ./... | tee govulncheck.txt
+
+      - name: Artifact - upload govulncheck report (push/tags only)
+        if: github.event_name == 'push' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-gin-govulncheck
+          path: golang-gin/govulncheck.txt
+          if-no-files-found: warn
+
+  java:
+    name: Java / Spring Boot - Spotless, SpotBugs, tests, JaCoCo, security
+    runs-on: ubuntu-latest
+    needs: [ policy ]
+    defaults:
+      run:
+        working-directory: java-springboot
+
+    env:
+      DEPENDENCY_CHECK_MAVEN_VERSION: ""
+      DEPENDENCY_CHECK_FAIL_CVSS: ""
+      MAVEN_OPTS: "--sun-misc-unsafe-memory-access=allow"
+      ODC_DATA_DIR: "${{ github.workspace }}/.cache/dependency-check"
+      ODC_CACHE_EPOCH: "unset"
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6.0.0
+
+      - name: Load tool versions
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          test -f .ci-tool-versions.sh
+          cat .ci-tool-versions.sh >> "$GITHUB_ENV"
+
+      - name: Security - dependency review (PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+
+      - name: Setup - JDK 25 (Temurin)
+        uses: actions/setup-java@v5.0.0
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Build - verify (Spotless, SpotBugs, tests, JaCoCo)
+        run: mvn -B -ntp verify
+
+      - name: Artifact - upload JaCoCo report directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-springboot-jacoco
+          path: java-springboot/target/site/jacoco/
+          if-no-files-found: error
+
+      - name: Compute cache epoch (weekly)
+        if: github.event_name == 'push'
+        shell: bash
+        run: echo "ODC_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
+
+      - name: Cache - OWASP Dependency-Check data (push/tags only)
+        if: github.event_name == 'push'
+        uses: actions/cache@v5.0.0
+        with:
+          path: ${{ env.ODC_DATA_DIR }}
+          key: dependency-check-${{ runner.os }}-${{ env.DEPENDENCY_CHECK_MAVEN_VERSION }}-${{ env.ODC_CACHE_EPOCH }}
+          restore-keys: |
+            dependency-check-${{ runner.os }}-${{ env.DEPENDENCY_CHECK_MAVEN_VERSION }}-
+
+      - name: Security - OWASP Dependency-Check scan (push/tags only)
+        if: github.event_name == 'push'
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          mvn -B -ntp org.owasp:dependency-check-maven:${DEPENDENCY_CHECK_MAVEN_VERSION}:check \
+            -DfailBuildOnCVSS=${DEPENDENCY_CHECK_FAIL_CVSS} \
+            -Dformats=HTML,JSON \
+            -DdataDirectory="${ODC_DATA_DIR}" \
+            -DnvdApiKeyEnvironmentVariable=NVD_API_KEY
+
+      - name: Artifact - upload Dependency-Check reports (push/tags only)
+        if: github.event_name == 'push' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-springboot-dependency-check
+          path: |
+            java-springboot/target/dependency-check-report.html
+            java-springboot/target/dependency-check-report.json
+          if-no-files-found: warn
+
+  python:
+    name: Python / Django - quality, tests, coverage, security
+    runs-on: ubuntu-latest
+    needs: [ policy ]
+    defaults:
+      run:
+        working-directory: python-django
+
+    env:
+      PIP_AUDIT_VERSION: ""
+      PIP_TOOLS_VERSION: ""
+      PIP_MAX_VERSION: ""
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6.0.0
+
+      - name: Load tool versions
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          test -f .ci-tool-versions.sh
+          cat .ci-tool-versions.sh >> "$GITHUB_ENV"
+
+      - name: Security - dependency review (PR only)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+
+      - name: Setup - Python 3.12
+        uses: actions/setup-python@v6.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Setup - create isolated venv for CI tools (pip-tools)
+        run: |
+          python -m venv .venv-ci
+          . .venv-ci/bin/activate
+          python -m pip install -U "pip<${PIP_MAX_VERSION}" "pip-tools==${PIP_TOOLS_VERSION}"
+
+      - name: Validate - requirements.lock matches requirements.txt
+        run: |
+          . .venv-ci/bin/activate
+          pip-compile --no-strip-extras --generate-hashes --output-file=requirements.lock requirements.txt
+          git diff --exit-code -- requirements.lock
+
+      - name: Install - runtime + test dependencies (locked)
+        run: |
+          . .venv-ci/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install -r requirements.test.txt
+
+      - name: Validate - installed packages are consistent (pip check, compileall)
+        run: |
+          . .venv-ci/bin/activate
+          python -m pip check
+          python -m compileall -q app
+
+      - name: Quality - format check (ruff format)
+        run: |
+          . .venv-ci/bin/activate
+          ruff format --check .
+
+      - name: Quality - lint (ruff)
+        run: |
+          . .venv-ci/bin/activate
+          ruff check .
+
+      - name: Quality - typecheck (mypy) (PR only, non-blocking)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          . .venv-ci/bin/activate
+          mypy app
+
+      - name: Quality - typecheck (mypy) (push/tags only, blocking)
+        if: github.event_name == 'push'
+        run: |
+          . .venv-ci/bin/activate
+          mypy app
+
+      - name: Test - unit tests + coverage (pytest, enforce 100%, write XML)
+        env:
+          DJANGO_SETTINGS_MODULE: django_app.settings
+        run: |
+          . .venv-ci/bin/activate
+          pytest --cov --cov-report=xml --cov-fail-under=100
+
+      - name: Artifact - upload coverage report (coverage.xml)
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-django-coverage
+          path: python-django/coverage.xml
+          if-no-files-found: error
+
+      - name: Security - vulnerability scan (pip-audit) (push/tags only)
+        if: github.event_name == 'push'
+        run: |
+          . .venv-ci/bin/activate
+          python -m pip install "pip-audit==${PIP_AUDIT_VERSION}"
+          pip-audit -r requirements.lock --format=json --output=pip-audit.json
+          pip-audit -r requirements.lock
+
+      - name: Artifact - upload pip-audit report (push/tags only)
+        if: github.event_name == 'push' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-django-pip-audit
+          path: python-django/pip-audit.json
+          if-no-files-found: warn
+
+  docker:
+    name: Docker - build (cache + push on tags)
+    runs-on: ubuntu-latest
+    needs: [ policy, go, java, python ]
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      REGISTRY: docker.io
+      DOCKERHUB_NAMESPACE: johnjaysonlopez
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: golang-gin-app
+            context: ./golang-gin
+          - image: java-springboot-app
+            context: ./java-springboot
+          - image: python-django-app
+            context: ./python-django
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6.0.0
+
+      - name: Compute - build metadata (version, build time, test flag)
+        id: vars
+        shell: bash
+        run: |
+          echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version_arg=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "run_tests_arg=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version_arg=ci" >> "$GITHUB_OUTPUT"
+            echo "run_tests_arg=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Docker - compute tags and OCI labels (metadata-action)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,format=short
+
+      - name: Setup - Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Auth - Docker Hub login (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build - image (push/SBOM/provenance on tags)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            RUN_TESTS=${{ steps.vars.outputs.run_tests_arg }}
+            SERVICE_NAME=${{ matrix.image }}
+            VERSION=${{ steps.vars.outputs.version_arg }}
+            BUILD_TIME=${{ steps.vars.outputs.build_time }}
+            OCI_IMAGE_SOURCE=https://github.com/${{ github.repository }}
+            OCI_IMAGE_REVISION=${{ github.sha }}
+          sbom: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          provenance: ${{ startsWith(github.ref, 'refs/tags/v') }}

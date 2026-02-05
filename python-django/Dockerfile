@@ -1,80 +1,98 @@
+# syntax=docker/dockerfile:1.7
+
+ARG PYTHON_VERSION=3.12.12
+ARG DEBIAN_SUITE=bookworm
+
 # ==============================
 # Stage 1: Build the application
 # ==============================
-FROM python:3.12-alpine AS builder
-
+FROM python:${PYTHON_VERSION}-slim-${DEBIAN_SUITE} AS builder
 WORKDIR /app
 
-# Build-time arguments (CI/Compose contract):
-# - RUN_TESTS: optional Django tests during image build
-ARG RUN_TESTS=true
+ARG APT_BUILD_DEPS=""
+ARG REQUIREMENTS_FILE=requirements.lock
 
-# Build dependencies (builder-only):
-# Alpine uses musl; some packages may need compilation.
-# Keep compilers out of runtime by installing them only in this builder stage.
-RUN apk add --no-cache gcc musl-dev libffi-dev
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Dependency caching:
-# Copy requirements first so wheel build stays cached unless deps change.
-COPY requirements.txt ./
+RUN set -eu; \
+    if [ -n "${APT_BUILD_DEPS}" ]; then \
+      apt-get update; \
+      apt-get install -y --no-install-recommends ${APT_BUILD_DEPS}; \
+      rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    python -m venv /venv; \
+    /venv/bin/pip install -U pip setuptools wheel
 
-# Build wheels for all dependencies (future-proof for native deps on Alpine).
-# Produces /wheels/*.whl which the runtime stage can install without compiling.
-RUN python -m pip install --upgrade pip \
-    && pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+COPY requirements.txt requirements.lock* ./
 
-# Create a virtualenv and install deps FROM wheels (mirrors runtime behavior),
-# then run tests against the exact wheel set used for production.
-RUN python -m venv /venv \
-    && /venv/bin/pip install --upgrade pip \
-    && /venv/bin/pip install --no-index --find-links=/wheels -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    set -eu; \
+    echo "Using ${REQUIREMENTS_FILE}"; \
+    test -f "${REQUIREMENTS_FILE}"; \
+    /venv/bin/pip wheel --wheel-dir=/wheels -r "${REQUIREMENTS_FILE}"; \
+    /venv/bin/pip install --no-index --find-links=/wheels -r "${REQUIREMENTS_FILE}"; \
+    rm -rf /wheels
 
-# Copy app source (Django project).
 COPY app ./app
 
-# Optional tests (defense-in-depth gate).
-ENV DJANGO_SETTINGS_MODULE=django_app.settings
-WORKDIR /app/app
-RUN if [ "$RUN_TESTS" = "true" ]; then /venv/bin/python manage.py test; fi
-
 
 # ==============================
-# Stage 2: Runtime image
+# Stage 2: Test (separate venv)
 # ==============================
-FROM python:3.12-alpine
-
-# Runtime packages:
-# - curl: used by container HEALTHCHECK
-# - ca-certificates: enables outbound TLS trust store
-#
-# NOTE:
-# If you later add deps that require runtime shared libs, add them here
-# (e.g., libffi, libpq, etc.). Keep runtime minimal by default.
-RUN apk add --no-cache curl ca-certificates
-
+FROM python:${PYTHON_VERSION}-slim-${DEBIAN_SUITE} AS test
 WORKDIR /app
 
-# Install runtime dependencies into an isolated venv from prebuilt wheels.
-# IMPORTANT:
-# - BuildKit mount accesses /wheels from the builder stage without copying wheels
-#   into the final image layers (keeps runtime image smaller/cleaner).
-COPY requirements.txt ./
-RUN --mount=type=bind,from=builder,source=/wheels,target=/wheels \
-    python -m venv /venv \
-    && /venv/bin/pip install --upgrade pip \
-    && /venv/bin/pip install --no-index --find-links=/wheels -r requirements.txt
+ARG RUN_TESTS=true
+ARG REQUIREMENTS_FILE=requirements.lock
 
-# Copy app source from builder stage.
-COPY --from=builder /app/app ./app
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DJANGO_SETTINGS_MODULE=django_app.settings
 
-# Build-time args re-declared in runtime stage (used for labels + ENV defaults).
+RUN set -eu; \
+    python -m venv /venv-test; \
+    /venv-test/bin/pip install -U pip setuptools wheel
+
+COPY requirements.txt requirements.lock* ./
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    set -eu; \
+    echo "Using ${REQUIREMENTS_FILE} (test venv)"; \
+    test -f "${REQUIREMENTS_FILE}"; \
+    /venv-test/bin/pip wheel --wheel-dir=/wheels-test -r "${REQUIREMENTS_FILE}"; \
+    /venv-test/bin/pip install --no-index --find-links=/wheels-test -r "${REQUIREMENTS_FILE}"; \
+    rm -rf /wheels-test
+
+COPY requirements.test.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    set -eu; \
+    /venv-test/bin/pip install -r requirements.test.txt
+
+COPY app ./app
+COPY pytest.ini ./pytest.ini
+COPY tests ./tests
+
+WORKDIR /app/app
+RUN set -eu; \
+    if [ "${RUN_TESTS}" = "true" ]; then \
+      /venv-test/bin/pytest; \
+    fi
+
+
+# ==============================
+# Stage 3: Runtime image
+# ==============================
+FROM python:${PYTHON_VERSION}-slim-${DEBIAN_SUITE} AS runtime
+WORKDIR /app
+
 ARG SERVICE_NAME=python-django-app
 ARG VERSION=dev
 ARG BUILD_TIME=local
 ARG OCI_IMAGE_SOURCE=""
 ARG OCI_IMAGE_REVISION=""
 
-# OCI labels (traceability):
 LABEL org.opencontainers.image.title="${SERVICE_NAME}" \
       org.opencontainers.image.description="Polyglot lab - Python + Django HTTP service" \
       org.opencontainers.image.version="${VERSION}" \
@@ -83,47 +101,37 @@ LABEL org.opencontainers.image.title="${SERVICE_NAME}" \
       org.opencontainers.image.source="${OCI_IMAGE_SOURCE}" \
       org.opencontainers.image.revision="${OCI_IMAGE_REVISION}" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.authors="John Jayson Lopez"
+      org.opencontainers.image.authors="John Jayson Lopez" \
+      org.opencontainers.image.base.name="python:${PYTHON_VERSION}-slim-${DEBIAN_SUITE}"
 
-# Runtime env defaults (overridable via Compose):
-# - PATH points to venv so "python"/"gunicorn" resolve from /venv.
-# - PYTHONUNBUFFERED=1 ensures logs flush immediately (important for containers).
-# - PORT + build metadata are exposed for /info + metrics and runtime debugging parity.
-# - Remaining knobs are consumed by the app and/or entrypoint.py (Gunicorn launcher).
-ENV PATH="/venv/bin:$PATH" \
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DJANGO_SETTINGS_MODULE=django_app.settings \
-    HOST=0.0.0.0 \
+    DJANGO_WSGI_MODULE=django_app.wsgi:application \
     PORT=8080 \
     SERVICE_NAME=${SERVICE_NAME} \
     VERSION=${VERSION} \
     BUILD_TIME=${BUILD_TIME} \
-    LOG_LEVEL=INFO \
-    READ_TIMEOUT=2s \
-    IDLE_TIMEOUT=30s \
-    SHUTDOWN_TIMEOUT=5s \
-    TRUSTED_PROXIES="" \
-    GUNICORN_WORKERS=2 \
-    GUNICORN_WORKER_CLASS=gthread \
-    GUNICORN_THREADS=4 \
-    GUNICORN_TIMEOUT=30 \
-    GUNICORN_KEEPALIVE=5 \
-    GUNICORN_GRACEFUL_TIMEOUT=5
+    PATH="/venv/bin:${PATH}"
 
-# Non-root runtime user (security posture):
-RUN addgroup -g 10001 appgroup \
-    && adduser -D -u 10001 -G appgroup appuser
+RUN set -eu; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates; \
+    rm -rf /var/lib/apt/lists/*; \
+    addgroup --gid 10001 appgroup; \
+    adduser --disabled-password --gecos "" --uid 10001 --gid 10001 appuser
 
-USER appuser
+COPY --from=builder /venv /venv
+COPY --chown=appuser:appgroup --from=builder /app/app /app/app
+
+COPY --chown=appuser:appgroup gunicorn.conf.py /app/gunicorn.conf.py
+COPY --chown=appuser:appgroup entrypoint.sh /app/entrypoint.sh
+RUN chmod 0555 /app/entrypoint.sh
 
 EXPOSE 8080
-
-# Container liveness:
-# Use 127.0.0.1 so healthcheck doesn't depend on DNS/networking.
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD curl -fsS http://127.0.0.1:${PORT}/health || exit 1
-
-# Entrypoint:
-# Exec form avoids shell; entrypoint.py reads env and execs Gunicorn.
+USER appuser
 WORKDIR /app/app
-ENTRYPOINT ["python", "-u", "entrypoint.py"]
+STOPSIGNAL SIGTERM
+
+ENTRYPOINT ["/app/entrypoint.sh"]

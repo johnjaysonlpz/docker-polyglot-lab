@@ -1,0 +1,32 @@
+{{ define "telegram.polyglot.message" -}}
+🚨 {{ .Status | toUpper }} — {{ .CommonLabels.alertname }} 🚨
+Severity: {{ .CommonLabels.severity }}
+Service: {{ .CommonLabels.job }}
+Alerts: {{ len .Alerts }}
+
+{{- range $i, $a := .Alerts -}}
+{{- if lt $i 5 }}
+
+---
+Instance: {{ $a.Labels.instance }}
+StartsAt: {{ $a.StartsAt }}
+{{- if $a.Annotations.summary }}
+Summary: {{ $a.Annotations.summary }}
+{{- end }}
+{{- if $a.Annotations.description }}
+Details: {{ $a.Annotations.description }}
+{{- end }}
+{{- if $a.Annotations.runbook_url }}
+Runbook: {{ $a.Annotations.runbook_url }}
+{{- end }}
+{{- if $a.GeneratorURL }}
+Source: {{ $a.GeneratorURL }}
+{{- end }}
+
+{{- end }}
+{{- end }}
+
+{{- if gt (len .Alerts) 5 }}
+… (more alerts omitted)
+{{- end }}
+{{- end }}
