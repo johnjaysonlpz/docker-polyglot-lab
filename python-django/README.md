@@ -47,9 +47,9 @@ cd python-django
 docker build \
   --build-arg RUN_TESTS=true \
   --build-arg SERVICE_NAME=python-django-app \
-  --build-arg VERSION=1.0.0 \
+  --build-arg VERSION=2.0.0 \
   --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -t python-django-app:1.0.0 .
+  -t python-django-app:2.0.0 .
 ```
 
 #### Run (using `.env.integration`)
@@ -59,7 +59,7 @@ docker run -d \
   --restart unless-stopped \
   --env-file .env.integration \
   -p 8083:8080 \
-  python-django-app:1.0.0
+  python-django-app:2.0.0
 ```
 
 #### Check status
@@ -119,7 +119,7 @@ Compose wiring for this service (from `docker/compose._apps.yaml`):
 ```json
 {
   "service": "python-django-app",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "build_time": "2026-02-03T07:22:30Z"
 }
 ```
@@ -131,7 +131,7 @@ Compose wiring for this service (from `docker/compose._apps.yaml`):
   "level": "INFO",
   "msg": "http_request",
   "service": "python-django-app",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "build_time": "2026-02-03T07:22:30Z",
   "request_id": "7fe0f262-9c9b-4d8a-b3e1-4ae5d79f62ca",
   "trace_id": "24b55ac4c6fc4506215b56998c8c6827",
