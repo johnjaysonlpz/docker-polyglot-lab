@@ -194,6 +194,12 @@ func setProtocol(t *testing.T, proto string) {
 	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", proto)
 }
 
+func clearOTLPEndpoints(t *testing.T) {
+	t.Helper()
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+}
+
 // setOTLPHTTP configures exporter=otlp and protocol=http/protobuf.
 // If endpoint is empty, the code will fall back to base/default endpoint logic.
 func setOTLPHTTP(t *testing.T, endpoint string) {
@@ -334,6 +340,7 @@ func TestInitTracing_OTLP_HTTP_Success_NoLogger_NoPanic_ShutdownWorks(t *testing
 }
 
 func TestInitTracing_OTLP_HTTP_EndpointURLParseError_BubblesUp(t *testing.T) {
+	clearOTLPEndpoints(t)
 	setSDKEnabled(t)
 	setOTLPHTTP(t, "")
 	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
@@ -410,6 +417,7 @@ func TestInitTracing_OTLP_GRPC_Success_NoLogger_CoversNoLogBranch(t *testing.T) 
 }
 
 func TestInitTracing_OTLP_GRPC_ProtoVariant_UsesGRPCPath_AndLogs(t *testing.T) {
+	clearOTLPEndpoints(t)
 	setSDKEnabled(t)
 	setExporterOTLP(t)
 	setProtocol(t, "grpc/protobuf")
