@@ -1,0 +1,7 @@
+volumes:
+  alertmanager-data:
+  alloy-data:
+  grafana-data:
+  loki-data:
+  prometheus-data:
+  tempo-data:

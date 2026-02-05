@@ -1,0 +1,7 @@
+include:
+  - path:
+      - ./compose._network.yaml
+      - ./compose._volumes.shared.yaml
+      - ./compose._toolbox.yaml
+      - ./compose._apps.yaml
+    project_directory: .

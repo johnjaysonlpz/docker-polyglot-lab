@@ -1,0 +1,83 @@
+x-app-common: &app_common
+  networks: [polyglot-net]
+  restart: unless-stopped
+  init: true
+  user: "${APP_UID:-10001}:${APP_GID:-10001}"
+  volumes:
+    - toolbox:/tools:ro
+
+x-app-hardening: &app_hardening
+  read_only: true
+  tmpfs:
+    - /tmp
+    - /run
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  pids_limit: 256
+  ulimits:
+    nofile: 65536
+
+x-app-build-args: &app_build_args
+  RUN_TESTS: "true"
+  VERSION: "${APP_VERSION:-1.0.0}"
+  BUILD_TIME: "${BUILD_TIME:-unknown}"
+
+x-hc-app: &hc_app
+  interval: 10s
+  timeout: 10s
+  retries: 30
+  start_period: 2m
+
+services:
+  golang-gin-app:
+    <<: [*app_common, *app_hardening]
+    image: "golang-gin-app:${APP_VERSION:-1.0.0}"
+    pull_policy: build
+    build:
+      context: ../golang-gin
+      dockerfile: Dockerfile
+      args:
+        <<: *app_build_args
+        SERVICE_NAME: "golang-gin-app"
+    env_file:
+      - ../golang-gin/.env.${APP_ENV:-integration}
+    ports: ["127.0.0.1:8081:8080"]
+    healthcheck:
+      <<: *hc_app
+      test: ["CMD", "/tools/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/ready"]
+
+  java-springboot-app:
+    <<: [*app_common, *app_hardening]
+    image: "java-springboot-app:${APP_VERSION:-1.0.0}"
+    pull_policy: build
+    build:
+      context: ../java-springboot
+      dockerfile: Dockerfile
+      args:
+        <<: *app_build_args
+        SERVICE_NAME: "java-springboot-app"
+    env_file:
+      - ../java-springboot/.env.${APP_ENV:-integration}
+    ports: ["127.0.0.1:8082:8080"]
+    healthcheck:
+      <<: *hc_app
+      test: ["CMD", "/tools/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/ready"]
+
+  python-django-app:
+    <<: [*app_common, *app_hardening]
+    image: "python-django-app:${APP_VERSION:-1.0.0}"
+    pull_policy: build
+    build:
+      context: ../python-django
+      dockerfile: Dockerfile
+      args:
+        <<: *app_build_args
+        SERVICE_NAME: "python-django-app"
+    env_file:
+      - ../python-django/.env.${APP_ENV:-integration}
+    ports: ["127.0.0.1:8083:8080"]
+    healthcheck:
+      <<: *hc_app
+      test: ["CMD", "/tools/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/ready"]

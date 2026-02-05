@@ -1,0 +1,11 @@
+services:
+  toolbox-init:
+    networks: [polyglot-net]
+    image: busybox:1.37.0-musl
+    command:
+      - sh
+      - -c
+      - cp /bin/busybox /tools/busybox && chmod 0755 /tools/busybox
+    volumes:
+      - toolbox:/tools
+    restart: "no"

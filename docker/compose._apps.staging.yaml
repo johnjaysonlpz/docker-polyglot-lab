@@ -1,0 +1,15 @@
+services:
+  golang-gin-app:
+    image: "${REGISTRY:-docker.io/johnjaysonlopez}/golang-gin-app:${APP_VERSION:-1.0.0}"
+    pull_policy: always
+    build: !reset null
+
+  java-springboot-app:
+    image: "${REGISTRY:-docker.io/johnjaysonlopez}/java-springboot-app:${APP_VERSION:-1.0.0}"
+    pull_policy: always
+    build: !reset null
+
+  python-django-app:
+    image: "${REGISTRY:-docker.io/johnjaysonlopez}/python-django-app:${APP_VERSION:-1.0.0}"
+    pull_policy: always
+    build: !reset null

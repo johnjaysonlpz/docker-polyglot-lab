@@ -1,0 +1,16 @@
+x-app-depends: &app_depends
+  depends_on:
+    toolbox-init:
+      condition: service_completed_successfully
+    alloy:
+      condition: service_healthy
+
+services:
+  golang-gin-app:
+    <<: *app_depends
+
+  java-springboot-app:
+    <<: *app_depends
+
+  python-django-app:
+    <<: *app_depends

@@ -1,0 +1,65 @@
+multitenancy_enabled: false
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  trace_idle_period: 10s
+
+  max_block_bytes: 52428800
+  max_block_duration: 10m
+
+  lifecycler:
+    min_ready_duration: 0s
+    join_after: 0s
+
+compactor:
+  ring:
+    kvstore:
+      store: inmemory
+  compaction:
+    block_retention: 168h
+    compacted_block_retention: 1h
+    compaction_window: 1h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/traces
+
+metrics_generator:
+  ring:
+    kvstore:
+      store: inmemory
+
+  traces_storage:
+    path: /var/tempo/generator/traces
+
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write
+
+  processor:
+    local_blocks:
+      filter_server_spans: false
+      flush_to_storage: true
+    span_metrics: {}
+    service_graphs: {}
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [local-blocks, span-metrics, service-graphs]

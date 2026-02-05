@@ -1,0 +1,129 @@
+logging {
+  level = coalesce(sys.env("ALLOY_LOG_LEVEL"), "info")
+}
+
+otelcol.receiver.otlp "traces" {
+  grpc { endpoint = coalesce(sys.env("ALLOY_OTLP_GRPC_LISTEN_ADDR"), "0.0.0.0:4317") }
+  http { endpoint = coalesce(sys.env("ALLOY_OTLP_HTTP_LISTEN_ADDR"), "0.0.0.0:4318") }
+
+  output {
+    traces  = [otelcol.processor.memory_limiter.traces.input]
+    metrics = []
+    logs    = []
+  }
+}
+
+otelcol.processor.memory_limiter "traces" {
+  check_interval         = coalesce(sys.env("ALLOY_TRACES_MEM_CHECK_INTERVAL"), "1s")
+  limit_percentage       = coalesce(sys.env("ALLOY_TRACES_MEM_LIMIT_PERCENTAGE"), 75)
+  spike_limit_percentage = coalesce(sys.env("ALLOY_TRACES_MEM_SPIKE_LIMIT_PERCENTAGE"), 25)
+
+  output {
+    traces = [otelcol.processor.batch.traces.input]
+  }
+}
+
+otelcol.processor.batch "traces" {
+  timeout             = coalesce(sys.env("ALLOY_TRACES_BATCH_TIMEOUT"), "2s")
+  send_batch_size     = coalesce(sys.env("ALLOY_TRACES_BATCH_SEND_SIZE"), 2048)
+  send_batch_max_size = coalesce(sys.env("ALLOY_TRACES_BATCH_MAX_SIZE"), 4096)
+
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = coalesce(sys.env("ALLOY_TEMPO_OTLP_ENDPOINT"), "tempo:4317")
+    tls {
+      insecure             = true
+      insecure_skip_verify = true
+    }
+  }
+
+  sending_queue {
+    enabled       = true
+    num_consumers = coalesce(sys.env("ALLOY_EXPORT_QUEUE_CONSUMERS"), 8)
+    queue_size    = coalesce(sys.env("ALLOY_EXPORT_QUEUE_SIZE"), 4096)
+  }
+
+  retry_on_failure {
+    enabled          = true
+    max_elapsed_time = coalesce(sys.env("ALLOY_EXPORT_RETRY_MAX_ELAPSED"), "10m")
+  }
+}
+
+discovery.docker "local" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "docker_logs" {
+  targets = []
+
+  rule {
+    action        = "replace"
+    source_labels = ["__meta_docker_container_name"]
+    target_label  = "container_name"
+    regex         = "/(.*)"
+    replacement   = "$1"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = ["container_name"]
+    target_label  = "job"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = ["container_name"]
+    target_label  = "service_name"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "job"
+    regex         = "(.+)"
+    replacement   = "$1"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service_name"
+    regex         = "(.+)"
+    replacement   = "$1"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+    regex         = "(.+)"
+    replacement   = "$1"
+  }
+
+  rule {
+    action        = "replace"
+    source_labels = ["__meta_docker_container_image"]
+    target_label  = "image"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.local.targets
+  relabel_rules = discovery.relabel.docker_logs.rules
+
+  labels = { platform = "docker" }
+
+  forward_to = [loki.write.loki.receiver]
+}
+
+loki.write "loki" {
+  endpoint {
+    url = coalesce(sys.env("ALLOY_LOKI_PUSH_URL"), "http://loki:3100/loki/api/v1/push")
+  }
+}
