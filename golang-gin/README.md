@@ -37,9 +37,9 @@ cd golang-gin
 docker build \
   --build-arg RUN_TESTS=true \
   --build-arg SERVICE_NAME=golang-gin-app \
-  --build-arg VERSION=1.0.0 \
+  --build-arg VERSION=2.0.0 \
   --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -t golang-gin-app:1.0.0 .
+  -t golang-gin-app:2.0.0 .
 ```
 
 #### Run (using `.env.integration`)
@@ -49,7 +49,7 @@ docker run -d \
   --restart unless-stopped \
   --env-file .env.integration \
   -p 8081:8080 \
-  golang-gin-app:1.0.0
+  golang-gin-app:2.0.0
 ```
 
 #### Check status
@@ -108,7 +108,7 @@ Compose wiring for this service:
 ```json
 {
   "service": "golang-gin-app",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "build_time": "2026-02-03T07:22:30Z"
 }
 ```
@@ -120,7 +120,7 @@ Compose wiring for this service:
   "level": "INFO",
   "msg": "http_request",
   "service": "golang-gin-app",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "build_time": "2026-02-03T07:22:30Z",
   "request_id": "b7ca7802-9ac5-4ec2-af06-2dde73a31ed1",
   "trace_id": "ec08a7b15e8612cfb600897ac85d2cac",

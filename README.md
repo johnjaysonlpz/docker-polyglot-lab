@@ -39,14 +39,15 @@ The canonical “run everything” entrypoint is the **Docker Compose stacks** i
 
 ## TL;DR
 
-### Run the full stack (apps + observability, no secrets overlays)
+### Run the full stack (pull images)
 
+#### up (NO secrets)
 ```bash
-BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-APP_ENV=integration APP_VERSION=1.0.0 \
+APP_ENV=staging APP_VERSION=2.0.0 \
+REGISTRY=docker.io/johnjaysonlopez \
 docker compose --project-directory docker \
-  -p polyglot-lab-integration -f docker/compose.integration.nosecrets.yaml \
-  up --build --remove-orphans
+  -p polyglot-lab-staging -f docker/compose.staging.nosecrets.yaml \
+  up --pull always --remove-orphans
 ```
 
 Open:
@@ -60,18 +61,32 @@ Open:
 If the system is idle, generate a little traffic so **metrics/logs/traces** populate quickly:
 
 ```bash
-URLS=(
-  "http://127.0.0.1:8081/"
-  "http://127.0.0.1:8082/"
-  "http://127.0.0.1:8083/"
-  "http://127.0.0.1:8081/info"
-  "http://127.0.0.1:8082/info"
-  "http://127.0.0.1:8083/info"
+TARGETS=(
+  "svc-a root (200)|http://127.0.0.1:8081/"
+  "svc-b root (200)|http://127.0.0.1:8082/"
+  "svc-c root (200)|http://127.0.0.1:8083/"
+
+  "svc-a info (200)|http://127.0.0.1:8081/info"
+  "svc-b info (200)|http://127.0.0.1:8082/info"
+  "svc-c info (200)|http://127.0.0.1:8083/info"
+
+  "svc-a WRONG /nope (404)|http://127.0.0.1:8081/nope"
+  "svc-b WRONG /nope (404)|http://127.0.0.1:8082/nope"
+  "svc-c WRONG /nope (404)|http://127.0.0.1:8083/nope"
+
+  "svc-a WRONG /infoo (404)|http://127.0.0.1:8081/infoo"
+  "svc-b WRONG /infoo (404)|http://127.0.0.1:8082/infoo"
+  "svc-c WRONG /infoo (404)|http://127.0.0.1:8083/infoo"
 )
 
-for url in "${URLS[@]}"; do
-  for i in {1..25}; do
-    curl -fsS "$url" >/dev/null || true
+REQUESTS_PER_TARGET=25
+
+for entry in "${TARGETS[@]}"; do
+  IFS='|' read -r label url <<< "$entry"
+  echo "Hitting: $label -> $url x$REQUESTS_PER_TARGET"
+  for ((i=1; i<=REQUESTS_PER_TARGET; i++)); do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' "$url" || echo '000')"
+    echo "  [$i/$REQUESTS_PER_TARGET] HTTP $code"
   done
 done
 ```

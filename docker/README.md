@@ -19,8 +19,6 @@ The commands below are written to be **runnable from the repository root** (supp
 
 #### up
 ```bash
-# from repo root
-
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 APP_ENV=development APP_VERSION=development \
 docker compose --project-directory docker \
@@ -30,8 +28,6 @@ docker compose --project-directory docker \
 
 #### down (also remove volumes)
 ```bash
-# from repo root
-
 docker compose --project-directory docker \
   -p polyglot-lab-development -f docker/compose.development.yaml \
   down -v --remove-orphans
@@ -41,10 +37,8 @@ docker compose --project-directory docker \
 
 #### up
 ```bash
-# from repo root
-
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-APP_ENV=integration APP_VERSION=1.0.0 \
+APP_ENV=integration APP_VERSION=2.0.0 \
 docker compose --project-directory docker \
   -p polyglot-lab-integration -f docker/compose.integration.nosecrets.yaml \
   up --build --remove-orphans
@@ -52,8 +46,6 @@ docker compose --project-directory docker \
 
 #### down (also remove volumes)
 ```bash
-# from repo root
-
 docker compose --project-directory docker \
   -p polyglot-lab-integration -f docker/compose.integration.nosecrets.yaml \
   down -v --remove-orphans
@@ -63,10 +55,8 @@ docker compose --project-directory docker \
 
 #### up
 ```bash
-# from repo root
-
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-APP_ENV=integration APP_VERSION=1.0.0 \
+APP_ENV=integration APP_VERSION=2.0.0 \
 docker compose --project-directory docker \
   -p polyglot-lab-integration -f docker/compose.integration.yaml \
   up --build --remove-orphans
@@ -75,8 +65,6 @@ docker compose --project-directory docker \
 
 #### down (also remove volumes)
 ```bash
-# from repo root
-
 docker compose --project-directory docker \
   -p polyglot-lab-integration -f docker/compose.integration.yaml \
   down -v --remove-orphans
@@ -86,10 +74,7 @@ docker compose --project-directory docker \
 
 #### up (NO secrets)
 ```bash
-# from repo root
-
-BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-APP_ENV=staging APP_VERSION=1.0.0 \
+APP_ENV=staging APP_VERSION=2.0.0 \
 REGISTRY=docker.io/johnjaysonlopez \
 docker compose --project-directory docker \
   -p polyglot-lab-staging -f docker/compose.staging.nosecrets.yaml \
@@ -98,10 +83,7 @@ docker compose --project-directory docker \
 
 #### down (NO secrets; also remove volumes)
 ```bash
-# from repo root
-
-BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-APP_ENV=staging APP_VERSION=1.0.0 \
+APP_ENV=staging APP_VERSION=2.0.0 \
 REGISTRY=docker.io/johnjaysonlopez \
 docker compose --project-directory docker \
   -p polyglot-lab-staging -f docker/compose.staging.nosecrets.yaml \
@@ -110,10 +92,8 @@ docker compose --project-directory docker \
 
 #### up (WITH secrets)
 ```bash
-# from repo root
-
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-APP_ENV=staging APP_VERSION=1.0.0 \
+APP_ENV=staging APP_VERSION=2.0.0 \
 REGISTRY=docker.io/johnjaysonlopez \
 docker compose --project-directory docker \
   -p polyglot-lab-staging -f docker/compose.staging.yaml \
@@ -122,10 +102,8 @@ docker compose --project-directory docker \
 
 #### down (WITH secrets; also remove volumes)
 ```bash
-# from repo root
-
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-APP_ENV=staging APP_VERSION=1.0.0 \
+APP_ENV=staging APP_VERSION=2.0.0 \
 REGISTRY=docker.io/johnjaysonlopez \
 docker compose --project-directory docker \
   -p polyglot-lab-staging -f docker/compose.staging.yaml \
@@ -143,18 +121,32 @@ Once the stack is running, these quick checks confirm the “happy path” end-t
 If the system is idle, generate a little traffic so **metrics/logs/traces** populate quickly:
 
 ```bash
-URLS=(
-  "http://127.0.0.1:8081/"
-  "http://127.0.0.1:8082/"
-  "http://127.0.0.1:8083/"
-  "http://127.0.0.1:8081/info"
-  "http://127.0.0.1:8082/info"
-  "http://127.0.0.1:8083/info"
+TARGETS=(
+  "svc-a root (200)|http://127.0.0.1:8081/"
+  "svc-b root (200)|http://127.0.0.1:8082/"
+  "svc-c root (200)|http://127.0.0.1:8083/"
+
+  "svc-a info (200)|http://127.0.0.1:8081/info"
+  "svc-b info (200)|http://127.0.0.1:8082/info"
+  "svc-c info (200)|http://127.0.0.1:8083/info"
+
+  "svc-a WRONG /nope (404)|http://127.0.0.1:8081/nope"
+  "svc-b WRONG /nope (404)|http://127.0.0.1:8082/nope"
+  "svc-c WRONG /nope (404)|http://127.0.0.1:8083/nope"
+
+  "svc-a WRONG /infoo (404)|http://127.0.0.1:8081/infoo"
+  "svc-b WRONG /infoo (404)|http://127.0.0.1:8082/infoo"
+  "svc-c WRONG /infoo (404)|http://127.0.0.1:8083/infoo"
 )
 
-for url in "${URLS[@]}"; do
-  for i in {1..25}; do
-    curl -fsS "$url" >/dev/null || true
+REQUESTS_PER_TARGET=25
+
+for entry in "${TARGETS[@]}"; do
+  IFS='|' read -r label url <<< "$entry"
+  echo "Hitting: $label -> $url x$REQUESTS_PER_TARGET"
+  for ((i=1; i<=REQUESTS_PER_TARGET; i++)); do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' "$url" || echo '000')"
+    echo "  [$i/$REQUESTS_PER_TARGET] HTTP $code"
   done
 done
 ```
@@ -384,8 +376,6 @@ Optional:
 #### Usage
 
 ```bash
-# from repo root
-
 export GRAFANA_ADMIN_USER=admin
 export GRAFANA_ADMIN_PASSWORD='supersecret'
 export TELEGRAM_BOT_TOKEN='...'
