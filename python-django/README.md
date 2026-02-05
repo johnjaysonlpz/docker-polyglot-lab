@@ -1,92 +1,49 @@
-# python-django-app
+# /python-django — **Python + Django** HTTP service (**metrics + traces + structured logs**)
 
-A small, production-style HTTP service built with **Python 3.12**, **Django**, and **Gunicorn**, designed as the Django component of the `docker-polyglot-lab` project.
+A small, production-shaped HTTP service built with **Python 3.12** and **Django 6.0.2**, designed to run standalone or as part of the repo’s Docker Compose lab stack.
 
-This service focuses on **operational concerns** rather than business logic:
-- Health & readiness endpoints
-- Structured JSON logging via `python-json-logger` (true fields, not string-parsed)
-- Request correlation via `X-Request-ID` (stored as `request_id` for all logs)
-- Prometheus metrics (`/metrics`) via `prometheus_client`
-- Stable metrics labels for 404s (`path="__unmatched__"`)
-- Real client IP handling behind reverse proxies (configurable trusted proxies)
-- Graceful shutdown with Gunicorn (`--graceful-timeout`)
-- Configuration via environment variables (validated in settings)
-- Multi-stage Docker build, non-root runtime
-- No shell entrypoint (`ENTRYPOINT ["python","-u","entrypoint.py"]`)
+It runs behind **Gunicorn 25.0.1** and exports the standard repo signals:
+
+**Signals (repo stack):** **traces → Alloy → Tempo**, **metrics → Prometheus**, **logs → Loki**.
 
 ---
 
-## Quick start
-
-### Prerequisites
-- Python **3.12**
-- `pip` and `virtualenv` (or the built-in `venv` module)
-- Docker (optional, for containerized runs)
-
-### Clone and enter the service directory
-
-```bash
-git clone https://github.com/johnjaysonlpz/docker-polyglot-lab.git
-cd docker-polyglot-lab/python-django
-```
-
-### Install dependencies (local)
-
-Create and activate a virtualenv, then install requirements:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate      # On Windows: .venv\Scripts\activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### Run tests
-
-From the `app` directory:
-
-```bash
-cd app
-export DJANGO_SETTINGS_MODULE=django_app.settings
-python manage.py test
-```
+## TL;DR
 
 ### Run locally (without Docker)
 
-Using Django’s development server:
+Requires:
+- **Python 3.12**
+- `pip` (venv recommended)
 
 ```bash
-cd python-django/app
+cd python-django
+python3.12 -m venv .venv
+. .venv/bin/activate
 
-export DJANGO_SETTINGS_MODULE=django_app.settings
-export DEBUG=true
-export HOST=0.0.0.0
-export PORT=8080
-export LOG_LEVEL=DEBUG
-export DJANGO_SECRET_KEY=dev-secret-key
+python -m pip install --upgrade pip
+python -m pip install --require-hashes -r requirements.lock
+python -m pip install -r requirements.test.txt
 
-python manage.py runserver 0.0.0.0:8080
+python app/manage.py runserver 0.0.0.0:8080
 ```
 
-Then hit:
-
+Smoke test:
 ```bash
-curl http://localhost:8080/
-curl http://localhost:8080/info
-curl http://localhost:8080/health
-curl http://localhost:8080/ready
-curl http://localhost:8080/metrics
+curl -i http://127.0.0.1:8080/health
+curl -i http://127.0.0.1:8080/ready
+curl -i http://127.0.0.1:8080/info
+curl -i http://127.0.0.1:8080/metrics
 ```
 
----
+### Running with Docker
 
-## Running with Docker
-
-### Build the image
-
-The Dockerfile uses a multi-stage build (test stage → runtime) and optionally runs tests:
+#### Build the image
+The Dockerfile builds a locked venv, optionally runs tests in a separate stage, and injects build metadata:
 
 ```bash
+cd python-django
+
 docker build \
   --build-arg RUN_TESTS=true \
   --build-arg SERVICE_NAME=python-django-app \
@@ -95,350 +52,439 @@ docker build \
   -t python-django-app:1.0.0 .
 ```
 
-### Run (prod-like, using `.env.int`)
-
+#### Run (using `.env.integration`)
 ```bash
 docker run -d \
   --name python-django-app \
   --restart unless-stopped \
-  --env-file .env.int \
+  --env-file .env.integration \
   -p 8083:8080 \
   python-django-app:1.0.0
 ```
 
-Check status:
-
+#### Check status
 ```bash
 docker ps
 docker logs -f python-django-app
 ```
 
-Example logs (shape):
+### Run via the repo Compose stacks
+From `docker/` in the repo root:
 
 ```bash
-[2025-12-19 09:18:41 +0000] [1] [INFO] Starting gunicorn 23.0.0
-[2025-12-19 09:18:41 +0000] [1] [INFO] Listening at: http://0.0.0.0:8080 (1)
+docker compose -f compose.development.yaml up --build
+# or full stack with observability
+docker compose -f compose.integration.nosecrets.yaml up --build
 ```
 
-Infra startup log (note `process`/`threadName` and request id placeholder):
+Compose wiring for this service (from `docker/compose._apps.yaml`):
+- service name: **`python-django-app`**
+- host port: **`127.0.0.1:8083`**
+- healthcheck: `GET http://127.0.0.1:8080/ready`
+- env file selection: `../python-django/.env.${APP_ENV:-integration}`
 
-```json
-{
-  "asctime": "2025-12-19 09:18:41,872",
-  "levelname": "INFO",
-  "name": "infra",
-  "process": 7,
-  "threadName": "MainThread",
-  "message": "infra_app_ready",
-  "request_id": "-"
-}
-```
+---
 
-The resulting image:
-- Uses `python:3.12-alpine` as runtime
-- Includes only curl + CA certs and a dedicated virtualenv
-- Runs as non-root user `appuser` (UID 10001)
-- Has a Docker `HEALTHCHECK` hitting `/health`
+## What this service provides
+
+- **Infra endpoints**: `GET /`, `GET /health`, `GET /ready`, `GET /info`
+- **Prometheus metrics**: `GET /metrics` (custom registry + process/platform/gc collectors)
+- **OpenTelemetry tracing**: WSGI + Django instrumentation via `opentelemetry-instrument` (enabled by default in Docker)
+- **Structured JSON logs**: canonical field ordering via `python-json-logger`
+- **Request correlation**: strict **`X-Request-ID`** policy (contextvars + response header + span attribute)
+- **Payload size limiting**: `MAX_BODY_BYTES` enforced at multiple layers (fast-fail + Django upload limits + `RequestDataTooBig` mapping)
+- **Readiness state**: in-process toggle (`infra.readiness.state`), used by `GET /ready`
+- **Graceful shutdown**: SIGINT/SIGTERM with configurable shutdown timeout
+- Hardened container build (non-root runtime; multi-stage build; optional tests)
 
 ---
 
 ## HTTP API
 
-All endpoints are HTTP GET.
+### Network
+- Binds to: `${HOST}:${PORT}` (defaults: **`0.0.0.0:8080`**)
+- Container port: **`8080`**
+- Repo compose port mapping: **`127.0.0.1:8083 → 8080`** (service: **`python-django-app`**)
 
-| Path       | Description                                                            | Status codes                                |
-| ---------- | ---------------------------------------------------------------------- | ------------------------------------------- |
-| `/`        | Simple banner: `"python-django-app is running (Python + Django)\n"`    | `200`                                       |
-| `/info`    | Service metadata (`service`, `version`, `buildTime`) as JSON           | `200`                                       |
-| `/health`  | Liveness probe (always `200` in this template)                         | `200`                                       |
-| `/ready`   | Readiness probe (based on in-memory readiness state)                   | `200` if accepting traffic, `503` otherwise |
-| `/metrics` | Prometheus metrics (text exposition format, Prometheus client library) | `200`                                       |
+### Endpoints
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/` | Plain-text “service is running” message |
+| GET | `/health` | Liveness probe (**200**) |
+| GET | `/ready` | Readiness probe (**200** if accepting traffic, else **503**) |
+| GET | `/info` | Build/service metadata (JSON) |
+| GET | `/metrics` | Prometheus scrape endpoint |
 
-In a real system, `/ready` would incorporate dependency checks (DB, downstream services, etc.).
-
-Examples (Docker, mapped to host port `8083`):
-
-```bash
-curl http://localhost:8083/
-curl http://localhost:8083/info
-curl http://localhost:8083/health
-curl http://localhost:8083/ready
-curl http://localhost:8083/metrics
-```
-
-The readiness behavior is controlled by `infra.readiness.state`, which can be toggled in code or tests.
-
----
-
-## Observability
-
-### Request correlation (`X-Request-ID`)
-- If the client sends `X-Request-ID`, the service reuses it
-- Otherwise, the service generates one
-- The value is always returned in the response header `X-Request-ID`
-- It is also stored as `request_id` and attached to all log records (MDC-like)
-
-Example:
-
-```bash
-curl -i -H "X-Request-ID: demo-123" http://localhost:8083/info
-```
-
-### Structured logging
-
-Logging is handled by Django’s logging configuration with `python-json-logger`:
-- Logs go to `stdout` as JSON
-- A request-id logging filter attaches `request_id` to every log record (ContextVar)
-- HTTP access logs use the dedicated logger `"http"` (middleware)
-- Infra endpoints (`/health`, `/ready`, `/metrics`) are not logged to keep noise low (but still counted in metrics)
-- Duplicate Django 404 logs are suppressed (middleware is the single source of HTTP access logs)
-
-HTTP access logs:
-- Message: `http_request`
-- Fields include:
-  - `service`, `version`, `buildTime`
-  - `request_id`
-  - `status`, `method`
-  - `path` (stable route label)
-  - `rawPath` (actual raw path)
-  - `query`
-  - `ip` (real client IP when trusted proxies configured)
-  - `latencyMs`
-  - `userAgent`
-
-Severity:
-- `2xx/3xx` → `INFO`
-- `4xx` → `WARNING`
-- `5xx` → `ERROR`
-
-Example log (shape):
-
+#### `/info` response
 ```json
 {
-  "asctime": "2025-12-19 09:19:45,026",
-  "levelname": "INFO",
-  "name": "http",
-  "process": 7,
-  "threadName": "Thread-1",
-  "message": "http_request",
-  "request_id": "demo-123",
   "service": "python-django-app",
   "version": "1.0.0",
-  "buildTime": "2025-12-19T09:18:13Z",
-  "status": 200,
-  "method": "GET",
-  "path": "/info",
-  "rawPath": "/info",
-  "query": "",
-  "ip": "172.17.0.1",
-  "latencyMs": 0.198,
-  "userAgent": "Mozilla/5.0 ..."
+  "build_time": "2026-02-03T07:22:30Z"
 }
 ```
 
----
-
-### Prometheus metrics
-
-Metrics are implemented via `prometheus_client` and exposed directly on `/metrics`:
-- `infra.metrics` defines a dedicated registry and metric objects
-- Metrics scraped via `metrics_view` → `scrape_metrics()`
-
-Key metrics:
-- `http_requests_total{service,method,path,status}` (counter)
-- `http_request_duration_seconds{service,method,path,status}` (histogram)
-- `build_info{service,version,build_time}` (gauge with value `1`)
-
-**Important**: `path` is a stable label.
-
-For matched routes it is the Django route pattern (e.g. `/info`)
-
-For unmatched routes (404s) it is `__unmatched__` to prevent label cardinality blowups
-
-Raw paths are still available in logs via `rawPath`
-
-Example check:
-
-```bash
-curl -s http://localhost:8083/metrics | grep http_requests_total
+#### `/info` logs
+```json
+{
+  "time": "2026-02-03T07:28:22.661249Z",
+  "level": "INFO",
+  "msg": "http_request",
+  "service": "python-django-app",
+  "version": "1.0.0",
+  "build_time": "2026-02-03T07:22:30Z",
+  "request_id": "7fe0f262-9c9b-4d8a-b3e1-4ae5d79f62ca",
+  "trace_id": "24b55ac4c6fc4506215b56998c8c6827",
+  "span_id": "6b45f5ebcfe79e7f",
+  "method": "GET",
+  "path": "/info",
+  "raw_path": "/info",
+  "status": 200,
+  "ip": "172.18.0.1",
+  "latency_ms": 0.137,
+  "bytes_written": 90,
+  "user_agent": "curl/7.81.0"
+}
 ```
+
+### Error response format
+All errors are emitted as:
+```json
+{
+  "error": "…",
+  "code": "…",
+  "request_id": "…"
+}
+```
+
+Common codes (explicitly mapped):
+- **400** → `bad_request`
+- **403** → `forbidden`
+- **404** → `not_found`
+- **405** → `method_not_allowed` (also sets `Allow: GET` on infra routes)
+- **413** → `payload_too_large`
+- **500** → `internal_server_error`
 
 ---
 
 ## Configuration
 
-Configuration is driven by environment variables, parsed and validated in `django_app.settings` via small helper functions.
+Configuration is read from environment variables and applied in `django_app/settings.py` and the Docker entrypoint.
 
-In production, Gunicorn process-level timeouts are configured via environment variables and should generally be chosen in line with `READ_TIMEOUT` and `IDLE_TIMEOUT`.
+### Core app env vars (aligned with Go/Java)
 
-### Core env vars
+These env vars intentionally mirror the other services where it makes sense (**HOST/PORT/timeouts/body limits/trusted proxies**), while adding Django-specific settings.
 
-| Variable            | Default               | Description                                                   |
-| ------------------- | --------------------- | ------------------------------------------------------------- |
-| `HOST`              | `0.0.0.0`             | Listen address (used for metadata; Gunicorn binds `0.0.0.0`)  |
-| `PORT`              | `8080`                | HTTP port (1–65535)                                           |
-| `LOG_LEVEL`         | `INFO`                | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, etc.)         |
-| `READ_TIMEOUT`      | `5s`                  | Read timeout (seconds, parsed as simple duration)             |
-| `IDLE_TIMEOUT`      | `120s`                | Idle/keep-alive timeout (seconds)                             |
-| `SHUTDOWN_TIMEOUT`  | `5s`                  | App-level shutdown intent (seconds)                           |
-| `DEBUG`             | `false`               | Django debug mode (`true`/`false`)                            |
-| `DJANGO_SECRET_KEY` | `insecure-dev-secret` | Django secret key                                             |
-| `TRUSTED_PROXIES`   | (empty)               | Comma-separated trusted proxy CIDRs/IPs for `X-Forwarded-For` |
+| Env var | Default | Notes |
+|---|---:|---|
+| `DJANGO_SECRET_KEY` | `development-secret-key` | required for real deployments |
+| `DEBUG` | `false` | parsed from `true/false` |
+| `HOST` | `0.0.0.0` | bind address used by `runserver`; in Docker Gunicorn binds `0.0.0.0:${PORT}` |
+| `PORT` | `8080` | validated **1..65535** |
+| `LOG_LEVEL` | `INFO` | root log level (applies to Django + app loggers) |
+| `READ_TIMEOUT` | `5s` | parsed as seconds (supports `5s` or `5`) |
+| `WRITE_TIMEOUT` | `10s` | parsed as seconds (supports `10s` or `10`) |
+| `READ_HEADER_TIMEOUT` | `2s` | parsed as seconds (supports `2s` or `2`) |
+| `IDLE_TIMEOUT` | `120s` | parsed as seconds (supports `120s` or `120`) |
+| `SHUTDOWN_TIMEOUT` | `5s` | parsed as seconds (supports `5s` or `5`) |
+| `MAX_BODY_BYTES` | `1048576` | validated **1..50 MiB**; used for Django upload limits and 413 behavior |
+| `TRUSTED_PROXIES` | empty | optional CSV of CIDR/IP used for `X-Forwarded-For` parsing |
 
-Timeouts are parsed via `env_duration_seconds` and must be strictly > 0.
+> Difference vs Go/Java: the middleware supports “disable limit when <= 0”, but `settings.py` validates `MAX_BODY_BYTES` as **>= 1**, so disabling requires a code change (intentionally strict).
 
-### Trusted proxies
+Build metadata variables are available as runtime defaults (and are commonly set at image build time):
+- `SERVICE_NAME` (default: `python-django-app`)
+- `VERSION` (default: `0.0.0-dev`)
+- `BUILD_TIME` (default: `unknown`)
 
-By default, the service does not trust forwarded headers.
-If you run behind a reverse proxy (ALB/Nginx), set `TRUSTED_PROXIES` so client IP is resolved correctly.
+### Gunicorn / runtime env vars (entrypoint)
 
-Example:
+`entrypoint.sh` starts Gunicorn with these knobs:
 
-```bash
-export TRUSTED_PROXIES="10.0.0.0/8,172.16.0.0/12"
-```
+| Env var | Default | Used for |
+|---|---:|---|
+| `DJANGO_WSGI_MODULE` | `django_app.wsgi:application` | Gunicorn app module |
+| `GUNICORN_CONFIG` | `/app/gunicorn.conf.py` | config file |
+| `GUNICORN_WORKERS` | `1` | worker processes |
+| `GUNICORN_WORKER_CLASS` | `gthread` | worker type |
+| `GUNICORN_THREADS` | `4` | threads per worker |
+| `GUNICORN_TIMEOUT` | `30` | seconds |
+| `GUNICORN_KEEPALIVE` | `5` | seconds |
+| `GUNICORN_GRACEFUL_TIMEOUT` | `5` | seconds |
+| `DJANGO_MIGRATE_ON_STARTUP` | `false` | if true: `manage.py migrate --noinput` |
+| `DJANGO_COLLECTSTATIC_ON_STARTUP` | `false` | if true: `manage.py collectstatic --noinput` |
+| `OTEL_PYTHON_ENABLED` | `true` | if true and `opentelemetry-instrument` exists, wraps Gunicorn with OTel instrumentation |
 
-### Gunicorn env vars
+### OpenTelemetry env vars (from `.env.*`)
 
-| Variable                    | Default   | Description                        |
-| --------------------------- | --------- | ---------------------------------- |
-| `GUNICORN_WORKERS`          | `2`       | Worker processes                   |
-| `GUNICORN_WORKER_CLASS`     | `gthread` | Worker type                        |
-| `GUNICORN_THREADS`          | `4`       | Threads per worker                 |
-| `GUNICORN_TIMEOUT`          | `30`      | Worker timeout (seconds)           |
-| `GUNICORN_KEEPALIVE`        | `5`       | Keep-alive seconds                 |
-| `GUNICORN_GRACEFUL_TIMEOUT` | `5`       | Graceful shutdown window (seconds) |
+The repo env files configure tracing consistently with other modules:
 
-### Build metadata
+#### `.env.development`
+Tracing is disabled explicitly:
+- `OTEL_TRACES_EXPORTER=none`
+- `OTEL_METRICS_EXPORTER=none`
+- `OTEL_LOGS_EXPORTER=none`
 
-Build metadata is provided via env vars and surfaced through `/info` and `build_info`:
+#### `.env.integration` / `.env.staging`
+Traces are exported to Alloy (OTLP/HTTP protobuf), logs/metrics exporters remain disabled:
+- `OTEL_SERVICE_NAME=python-django-app`
+- `OTEL_TRACES_EXPORTER=otlp`
+- `OTEL_METRICS_EXPORTER=none`
+- `OTEL_LOGS_EXPORTER=none`
+- `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://alloy:4318/v1/traces`
+- `OTEL_TRACES_SAMPLER=always_on`
 
-| Variable       | Default             | Description          |
-| -------------- | ------------------- | -------------------- |
-| `SERVICE_NAME` | `python-django-app` | Logical service name |
-| `VERSION`      | `0.0.0-dev`         | Build version        |
-| `BUILD_TIME`   | `unknown`           | Build timestamp      |
+### Provided env templates
+This module includes:
+- `.env.development`
+- `.env.integration`
+- `.env.staging`
 
-Verify:
+---
 
-```bash
-curl http://localhost:8083/info
-# => {"service":"python-django-app","version":"1.0.0","buildTime":"2025-12-19T09:18:13Z"}
+## Request processing pipeline
+
+### URL routing
+`django_app/urls.py` defines:
+- routes: `/`, `/info`, `/health`, `/ready`, `/metrics`
+- error handlers: `handler400/403/404/500` mapped to `infra.errors.*`
+
+### Middleware order (outer → inner)
+Configured in `django_app/settings.py`:
+
+1. **`infra.middleware.RequestIdMiddleware`**
+   - validates inbound `X-Request-ID`:
+     - trim; non-empty; length ≤ 128
+     - rejects `\r`, `\n`, `\t`
+     - allowed chars: `^[A-Za-z0-9._\-:]+$`
+   - if invalid/missing: generates UUID
+   - stores id on request (`request.request_id`) and in `contextvars`
+   - echoes `X-Request-ID` in the response
+   - attaches `request_id` attribute to the active span (best-effort)
+
+2. **`django.middleware.security.SecurityMiddleware`** (standard)
+3. **`django.middleware.common.CommonMiddleware`** (standard)
+
+4. **`infra.middleware.HttpLoggingAndMetricsMiddleware`**
+   - records Prometheus metrics per request
+   - emits structured access logs to logger name `http` with message `http_request`
+   - determines client IP:
+     - if `REMOTE_ADDR` is in `TRUSTED_PROXIES`, uses `X-Forwarded-For` chain to pick the first untrusted hop
+     - otherwise uses `REMOTE_ADDR` directly
+   - log suppression for successful infra paths: `/health`, `/ready`, `/metrics`
+   - log levels: `INFO` (<400), `WARNING` (4xx), `ERROR` (5xx/exception)
+   - maps Django `RequestDataTooBig` to a stable 413 response
+
+5. **`infra.middleware.MaxBodyBytesMiddleware`**
+   - fast-fails based on `Content-Length` if `> MAX_BODY_BYTES` → 413
+
+---
+
+## Payload validation & limits
+
+### `MAX_BODY_BYTES` (default **1 MiB**)
+Enforced in **three places**:
+
+1. **Django request upload limits**
+   - `DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_BODY_BYTES`
+   - `FILE_UPLOAD_MAX_MEMORY_SIZE = MAX_BODY_BYTES`
+   - if exceeded during parsing: Django raises `RequestDataTooBig`, which is mapped to **413**.
+
+2. **Fast fail middleware**
+   - `MaxBodyBytesMiddleware` checks `Content-Length` early and returns 413 when `> MAX_BODY_BYTES`.
+
+3. **Stable 413 JSON**
+   - `infra.errors.payload_too_large` returns:
+```json
+{ "error": "payload too large", "code": "payload_too_large", "request_id": "…" }
 ```
 
 ---
 
-## `.env` profiles
+## Observability
 
-The project includes environment files for convenience:
-- `.env.dev` – local development (DEBUG, short timeouts)
-- `.env.int` – integration / prod-like
-- `.env.prod` – production baseline
+### Metrics (Prometheus)
+`/metrics` uses **prometheus-client 0.24.1** with a module-scoped `CollectorRegistry` and collectors:
+- process
+- platform
+- gc
 
-Example `.env.int`:
+Custom metrics:
+- **`http_requests_total{method,path,status}`**
+- **`http_request_duration_seconds{method,path,status}`** (buckets: 5ms..10s)
+- **`build_info{version,build_time}`** (gauge set to 1)
 
-```env
-DEBUG=false
-HOST=0.0.0.0
-PORT=8080
+Path labeling (low cardinality):
+- 404 → `__unmatched__`
+- else uses Django’s resolver route template (`request.resolver_match.route`)
+  - empty route maps to `/`
+- infra paths keep raw path
+- otherwise falls back to `__unmatched__`
 
-LOG_LEVEL=INFO
+Access log suppression:
+- successful `/health`, `/ready`, `/metrics` are **not logged** (but are still counted in metrics).
 
-READ_TIMEOUT=2s
-IDLE_TIMEOUT=30s
-SHUTDOWN_TIMEOUT=5s
+### Tracing (OpenTelemetry)
+- Docker entrypoint wraps Gunicorn with `opentelemetry-instrument` when `OTEL_PYTHON_ENABLED=true`.
+- The request middleware attaches `request_id` to the active span attribute `request_id` (best-effort).
 
-DJANGO_SECRET_KEY=dev-secret-key
+Repo env files typically set:
+- `OTEL_TRACES_EXPORTER=otlp`
+- `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://alloy:4318/v1/traces`
+- `OTEL_TRACES_SAMPLER=always_on`
 
-# Optional: only if running behind proxies you trust
-# TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12
+### Logs
+Structured logs are configured in `infra/logging_config.py` and used by both Django and Gunicorn:
 
-# Gunicorn
-GUNICORN_WORKERS=2
-GUNICORN_WORKER_CLASS=gthread
-GUNICORN_THREADS=4
-GUNICORN_TIMEOUT=30
-GUNICORN_KEEPALIVE=5
-GUNICORN_GRACEFUL_TIMEOUT=5
+- canonical JSON schema with stable field ordering
+- service metadata fields injected automatically:
+  - `service`, `version`, `build_time`
+- request correlation via `request_id` (contextvars)
+- trace correlation via live span context:
+  - `trace_id`, `span_id` when a valid span exists
+
+Gunicorn access logs are disabled (`accesslog = os.devnull`) because the app emits its own access logs.
+
+---
+
+## Error utilities
+
+Centralized JSON error utilities in `infra/errors.py`:
+- stable `error` + `code` + `request_id`
+- handler functions wired at the URLconf level: `handler400/403/404/500`
+- `method_not_allowed` returns 405 and sets `Allow` when provided
+
+---
+
+## Operational knobs
+
+This service’s “knobs” are primarily Gunicorn settings and request limits:
+
+- concurrency: `GUNICORN_WORKERS`, `GUNICORN_THREADS`, `GUNICORN_WORKER_CLASS`
+- timeouts: `GUNICORN_TIMEOUT`, `GUNICORN_KEEPALIVE`, `GUNICORN_GRACEFUL_TIMEOUT`
+- request limits: `MAX_BODY_BYTES`, `STACK_TRACE_MAX_CHARS`
+- proxy trust boundary: `TRUSTED_PROXIES` (affects client IP attribution)
+
+---
+
+## Testing & linting
+
+Unit tests + coverage:
+```bash
+cd python-django
+python3.12 -m venv .venv
+. .venv/bin/activate
+
+python -m pip install --require-hashes -r requirements.lock
+python -m pip install -r requirements.test.txt
+
+DJANGO_SETTINGS_MODULE=django_app.settings   pytest --cov --cov-report=xml --cov-fail-under=100
+```
+
+Formatting + lint + typecheck:
+```bash
+ruff format --check .
+ruff check .
+mypy app
 ```
 
 ---
 
-## Testing
+## Local CI
 
-Tests live in `infra/tests.py` and cover:
-- Infra endpoints:
-  - `/`, `/info`, `/health`, `/ready`, `/metrics`
-  - Readiness state behavior (`/ready` → `503` when not accepting)
-  - `X-Request-ID` is always present in responses (generated if missing)
-  - Incoming `X-Request-ID` is echoed back
+This repo provides a **local parity runner** at the repo root: `./.ci-local.sh` (mirrors `.github/workflows/cicd.yaml`).
 
-- HTTP logging & metrics middleware:
-  - Infra endpoints record metrics but do not log access lines
-  - Application endpoints produce `http_request` logs with structured fields
-  - 404s use stable metrics label: `path="__unmatched__"`
+### Prerequisites
+- bash
+- git (for `git diff --exit-code` checks)
+- **python3.12**
+- network access (to install CI tools into an isolated venv)
 
-Run tests:
+The CI runner uses tool versions from `./.ci-tool-versions.sh`:
+- `PIP_MAX_VERSION=26`
+- `PIP_TOOLS_VERSION=7.5.2`
+- `PIP_AUDIT_VERSION=2.10.0`
+
+### Run the Python module CI checks
+From repo root:
 
 ```bash
-cd python-django/app
-export DJANGO_SETTINGS_MODULE=django_app.settings
-python manage.py test
+source ./.ci-tool-versions.sh
+./.ci-local.sh python
 ```
 
-Docker build can run tests too:
+What it runs for this module (in order):
+- creates an isolated venv `.venv-ci` (removable via `CI_LOCAL_CLEAN_VENV=1`)
+- installs `pip<${PIP_MAX_VERSION}` and `pip-tools==${PIP_TOOLS_VERSION}`
+- regenerates `requirements.lock` with hashes from `requirements.txt` and enforces no diff:
+  - `pip-compile --no-strip-extras --generate-hashes --output-file=requirements.lock requirements.txt`
+  - `git diff --exit-code -- requirements.lock`
+- installs locked runtime deps and test deps
+- validates package state: `pip check`, `python -m compileall -q app`
+- formatting: `ruff format --check .`
+- lint: `ruff check .`
+- typecheck:
+  - **pull_request**: `mypy app` is **non-blocking**
+  - **push/tags**: `mypy app` is **blocking**
+- tests + coverage:
+  - `pytest --cov --cov-report=xml --cov-fail-under=100` (writes `coverage.xml`)
+- security (push/tags only):
+  - `pip-audit -r requirements.lock` (+ JSON report `pip-audit.json`)
 
+Useful options:
 ```bash
-docker build --build-arg RUN_TESTS=true -t python-django-app:test .
-docker build --build-arg RUN_TESTS=false -t python-django-app:fast .
+./.ci-local.sh doctor python --summary
+LOG_LEVEL=debug ./.ci-local.sh python
+CI_EVENT_NAME=pull_request ./.ci-local.sh python
+CI_LOCAL_CLEAN_VENV=0 ./.ci-local.sh python   # keep .venv-ci for debugging
 ```
 
 ---
 
-## Project Structure
+## Container image details
 
-```text
-python-django/
-├── Dockerfile
-├── .dockerignore
-├── requirements.txt
-├── .env.dev
-├── .env.int
-├── .env.prod
-└── app/
-    ├── manage.py                     # Django entrypoint
-    ├── entrypoint.py                 # Gunicorn exec launcher (no shell)
-    ├── django_app/
-    │   ├── __init__.py
-    │   ├── asgi.py
-    │   ├── settings.py               # Env-driven config + logging
-    │   ├── urls.py                   # Routes: /, /info, /health, /ready, /metrics
-    │   └── wsgi.py                   # WSGI entrypoint for Gunicorn
-    └── infra/
-        ├── __init__.py
-        ├── admin.py
-        ├── apps.py                   # Logs infra_app_ready on startup
-        ├── metrics.py                # Prometheus registry + metrics
-        ├── request_id.py             # request_id contextvar + log filter
-        ├── middleware.py             # HTTP logging + metrics + request id
-        ├── models.py
-        ├── readiness.py              # ReadinessState holder
-        ├── tests.py                  # Infra + middleware tests
-        └── views.py                  # Implements /, /info, /health, /ready, /metrics
-```
+### Dockerfile highlights
+- Multi-stage build:
+  - **builder**: creates `/venv`, installs from locked requirements, copies app
+  - **test**: separate venv `/venv-test`, installs test deps, runs pytest when `RUN_TESTS=true`
+  - **runtime**: copies `/venv` and app into slim Python image
+- Runs as non-root user (**uid=10001**), `STOPSIGNAL SIGTERM`
+- Injects build metadata into runtime env: `SERVICE_NAME`, `VERSION`, `BUILD_TIME`
+
+### Build arguments
+| Arg | Default | Purpose |
+|---|---:|---|
+| `PYTHON_VERSION` | `3.12` | base runtime version |
+| `DEBIAN_SUITE` | `bookworm` | base image variant |
+| `APT_BUILD_DEPS` | empty | optional apt deps for building wheels |
+| `REQUIREMENTS_FILE` | `requirements.lock` | allows choosing the lock file |
+| `RUN_TESTS` | `true` | controls test stage execution |
+| `SERVICE_NAME` | `python-django-app` | Default runtime env + OCI labels (and used by `/info`). |
+| `VERSION` | `dev` | Default runtime env + OCI labels (and used by `/info`). |
+| `BUILD_TIME` | `local` | Default runtime env + OCI labels (and used by `/info`). |
+| `OCI_IMAGE_SOURCE` | "" | Sets OCI label `org.opencontainers.image.source` (typically the repository URL; often populated in CI via `docker/build-push-action` `labels:` or `docker/metadata-action`). |
+| `OCI_IMAGE_REVISION` | "" | Sets OCI label `org.opencontainers.image.revision` (typically the Git commit SHA, e.g. GitHub Actions `GITHUB_SHA`; often populated in CI via `docker/build-push-action` `labels:` or `docker/metadata-action`). |
 
 ---
 
-## Notes
+## Implementation map (where to look)
 
-- This service intentionally has **minimal business logic** and **strong operational patterns**:
-  - health/readiness probes
-  - Prometheus metrics with stable labels
-  - JSON structured logging with request correlation
-  - Gunicorn-based runtime with graceful shutdown
-  - Docker best practices (multi-stage build, non-root, healthcheck, no shell entrypoint)
-- In the full `docker-polyglot-lab` project, there are equivalent services in:
-  - Go + Gin (`golang-gin`)
-  - Java + Spring Boot (`java-springboot`)
+- `pyproject.toml` — Ruff configuration (line length, lint rules)
+- `app/django_app/settings.py` — env parsing, middleware wiring, payload limits
+- `app/django_app/urls.py` — routing + error handler wiring
+- `app/infra/views.py` — endpoints (`/`, `/info`, `/health`, `/ready`, `/metrics`)
+- `app/infra/middleware.py` — request id, client IP, access logs, metrics, payload fast-fail
+- `app/infra/errors.py` — stable JSON errors
+- `app/infra/metrics.py` — Prometheus registry + meters + buckets
+- `app/infra/logging_config.py` — JSON log schema + correlation filters
+- `entrypoint.sh` — Gunicorn startup + optional OTel instrumentation
+- `gunicorn.conf.py` — Gunicorn log config (app JSON logs; access log suppressed)
 
-You can use this Django service as a template for new Python microservices with production-friendly defaults that align with the Go and Java implementations.
+---
+
+## Interactions with other modules
+
+- `/docker` runs this service as `python-django-app`, maps it to `127.0.0.1:8083`, scrapes `/metrics`, and routes OTLP traces via Alloy → Tempo.
+- `/golang-gin` and `/java-springboot` follow the same **health/ready/metrics/info + request-id + OTLP** conventions so dashboards/alerts can be shared.

@@ -1,67 +1,39 @@
-# golang-gin-app
+# /golang-gin — **Go + Gin** HTTP service (**metrics + traces + structured logs**)
 
-A small, production-style HTTP service built with **Go** and **Gin**, designed as the Go/Gin component of the `docker-polyglot-lab` project.
+A small, production-shaped HTTP service written in **Go 1.25.6** using **Gin 1.11.0**, designed to run standalone or as part of the repo’s Docker Compose lab stack.
 
-This service focuses on **operational concerns** rather than business logic:
-- Health & readiness endpoints
-- Structured JSON logging with `slog`
-- Request correlation via `X-Request-ID` (logged as `request_id`)
-- Prometheus metrics (`/metrics`)
-- Graceful shutdown on SIGINT/SIGTERM
-- Configuration via environment variables (validated on startup)
-- Small, non-root Docker image using a multi-stage build
-- Multi-arch ready Docker build (amd64/arm64)
+**Signals (repo stack):** **traces → Alloy → Tempo**, **metrics → Prometheus**, **logs → Loki**.
 
 ---
 
-## Quick start
-
-### Prerequisites
-- Go **1.25+**
-- Docker (optional, for containerized runs)
-
-### Clone and enter the service directory
-
-```bash
-git clone https://github.com/johnjaysonlpz/docker-polyglot-lab.git
-cd docker-polyglot-lab/golang-gin
-```
-
-### Run tests
-```bash
-go test ./...
-```
+## TL;DR
 
 ### Run locally (without Docker)
 
-```bash
-export GIN_MODE=debug
-export HOST=0.0.0.0
-export PORT=8080
-export LOG_LEVEL=debug
+Requires **Go 1.25.6**.
 
+```bash
+cd golang-gin
+set -a; source .env.development; set +a
 go run ./cmd/server
 ```
 
-Then hit:
-
+Smoke test:
 ```bash
-curl http://localhost:8080/
-curl http://localhost:8080/info
-curl http://localhost:8080/health
-curl http://localhost:8080/ready
-curl http://localhost:8080/metrics
+curl -i http://127.0.0.1:8080/health
+curl -i http://127.0.0.1:8080/ready
+curl -i http://127.0.0.1:8080/info
+curl -i http://127.0.0.1:8080/metrics
 ```
 
----
+### Running with Docker
 
-## Running with Docker
-
-### Build the image
-
+#### Build the image
 The Dockerfile builds the binary, optionally runs tests, and injects build metadata:
 
 ```bash
+cd golang-gin
+
 docker build \
   --build-arg RUN_TESTS=true \
   --build-arg SERVICE_NAME=golang-gin-app \
@@ -70,279 +42,361 @@ docker build \
   -t golang-gin-app:1.0.0 .
 ```
 
-### Run (prod-like, using `.env.int`)
-
+#### Run (using `.env.integration`)
 ```bash
 docker run -d \
   --name golang-gin-app \
   --restart unless-stopped \
-  --env-file .env.int \
+  --env-file .env.integration \
   -p 8081:8080 \
   golang-gin-app:1.0.0
 ```
 
-### Check status:
-
+#### Check status
 ```bash
 docker ps
 docker logs -f golang-gin-app
 ```
 
-### Example logs:
+### Run via the repo Compose stacks
+From `docker/` in the repo root:
 
-Startup log:
-
-```json
-{
-  "time":"2025-12-19T03:19:05.606872506Z",
-  "level":"INFO",
-  "msg":"starting_server",
-  "service":"golang-gin-app",
-  "version":"1.0.0",
-  "buildTime":"2025-12-19T03:18:13Z",
-  "addr":"0.0.0.0:8080",
-  "gin_mode":"release"
-}
+```bash
+docker compose -f compose.development.yaml up --build
+# or full stack with observability
+docker compose -f compose.integration.nosecrets.yaml up --build
 ```
 
-HTTP access log example (note `request_id`, stable `path`, and `rawPath` for debugging):
+Compose wiring for this service:
+- service name: **`golang-gin-app`**
+- host port: **`127.0.0.1:8081`**
+- healthcheck: `GET http://127.0.0.1:8080/ready`
+- env file selection: `../golang-gin/.env.${APP_ENV:-integration}`
 
-```json
-{
-  "time":"2025-12-19T03:19:52.7045954Z",
-  "level":"INFO",
-  "msg":"http_request",
-  "service":"golang-gin-app",
-  "version":"1.0.0",
-  "buildTime":"2025-12-19T03:18:13Z",
-  "status":200,
-  "method":"GET",
-  "path":"/info",
-  "rawPath":"/info",
-  "query":"",
-  "ip":"172.17.0.1",
-  "latency":"42.556µs",
-  "userAgent":"Mozilla/5.0 ...",
-  "request_id":"demo-123"
-}
-```
+---
 
-The resulting image is small and non-root:
-- ~43MB Alpine-based runtime
-- Runs as user `appuser` (UID 10001)
+## What this service provides
+
+- **Infra endpoints**: `GET /`, `GET /health`, `GET /ready`, `GET /info`
+- **Prometheus metrics**: `GET /metrics` (registry-scoped + custom meters + Go/process collectors)
+- **OpenTelemetry tracing**: Gin server spans via `otelgin`, exporting via OTLP (**http/protobuf** or **gRPC**)
+- **Structured JSON logs**: `log/slog` with per-request context
+- **Request correlation**: strict **`X-Request-ID`** policy, echoed in responses and attached to spans
+- **Payload size limiting**: `MAX_BODY_BYTES` with correct **413** behavior (fast-fail + `http.MaxBytesReader` mapping)
+- **Graceful shutdown**: SIGINT/SIGTERM with configurable shutdown timeout
+- Hardened container build (non-root, read-only-friendly runtime)
 
 ---
 
 ## HTTP API
 
-All endpoints are HTTP GET.
+### Network
+- Binds to: `${HOST}:${PORT}` (defaults: **`0.0.0.0:8080`**)
+- Container port: **`8080`**
+- Repo compose port mapping: **`127.0.0.1:8081 → 8080`** (service: **`golang-gin-app`**)
 
-| Path       | Description                                                  | Status codes |
-| ---------- | ------------------------------------------------------------ | ------------ |
-| `/`        | Simple banner: `"golang-gin-app is running (Go + Gin)\n"`    | `200`        |
-| `/info`    | Service metadata (`service`, `version`, `buildTime`) as JSON | `200`        |
-| `/health`  | Liveness probe (always `200` in this template)               | `200`        |
-| `/ready`   | Readiness probe (currently always `200` in this template)    | `200`        |
-| `/metrics` | Prometheus metrics (text exposition format)                  | `200`        |
+### Endpoints
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/` | Plain-text “service is running” message |
+| GET | `/health` | Liveness probe (**200**) |
+| GET | `/ready` | Readiness probe (**200**) |
+| GET | `/info` | Build/service metadata (JSON) |
+| GET | `/metrics` | Prometheus scrape endpoint |
 
-In a real system, `/ready` would incorporate dependency checks (DB, downstream services, etc.).
+#### `/info` response
+```json
+{
+  "service": "golang-gin-app",
+  "version": "1.0.0",
+  "build_time": "2026-02-03T07:22:30Z"
+}
+```
 
-Examples (Docker, mapped to host port 8081):
+#### `/info` logs
+```json
+{
+  "time": "2026-02-03T07:28:22.479749092Z",
+  "level": "INFO",
+  "msg": "http_request",
+  "service": "golang-gin-app",
+  "version": "1.0.0",
+  "build_time": "2026-02-03T07:22:30Z",
+  "request_id": "b7ca7802-9ac5-4ec2-af06-2dde73a31ed1",
+  "trace_id": "ec08a7b15e8612cfb600897ac85d2cac",
+  "span_id": "7b76bd13e91fd487",
+  "method": "GET",
+  "path": "/info",
+  "raw_path": "/info",
+  "status": 200,
+  "ip": "172.18.0.1",
+  "latency_ms": 0.022,
+  "bytes_written": 82,
+  "user_agent": "curl/7.81.0"
+}
+```
 
-```bash
-curl http://localhost:8081/
-curl http://localhost:8081/info
-curl http://localhost:8081/health
-curl http://localhost:8081/ready
-curl http://localhost:8081/metrics
+### Error response format
+All errors are emitted as:
+```json
+{
+  "error": "…",
+  "code": "…",
+  "request_id": "…"
+}
+```
+
+Common codes (explicitly mapped):
+- **404** → `not_found` (`NoRoute`)
+- **405** → `method_not_allowed` (`HandleMethodNotAllowed=true` + `NoMethod` handler)
+- **413** → `payload_too_large`
+- **500** → `internal_server_error` (panic recovery / fallback)
+
+---
+
+## Configuration
+
+All configuration is via environment variables (`internal/server/config.go`).
+
+| Env var | Default | Notes |
+|---|---:|---|
+| `GIN_MODE` | `release` | `debug`, `release`, `test`. **Case-insensitive**. Typically set before router creation; also reflected by Gin’s internal mode handling. |
+| `HOST` | `0.0.0.0` | bind address (e.g. `127.0.0.1` for local-only) |
+| `PORT` | `8080` | TCP listen port |
+| `LOG_LEVEL` | `info` | app logger level (recommended: accept case-insensitive `debug/info/warn/error`). Gin’s own mode is still controlled by `GIN_MODE`. |
+| `READ_TIMEOUT` | `5s` | HTTP server `ReadTimeout` |
+| `WRITE_TIMEOUT` | `10s` | HTTP server `WriteTimeout` |
+| `READ_HEADER_TIMEOUT` | `2s` | HTTP server `ReadHeaderTimeout` |
+| `IDLE_TIMEOUT` | `120s` | HTTP server `IdleTimeout` |
+| `SHUTDOWN_TIMEOUT` | `5s` | graceful shutdown deadline |
+| `MAX_BODY_BYTES` | `1048576` | max request body bytes. `<= 0` disables limit. Typically enforced via `http.MaxBytesReader` (or equivalent middleware) to trigger 413. |
+| `TRUSTED_PROXIES` | empty | CSV list consumed by Gin `SetTrustedProxies`. Prefer CIDRs (e.g. `10.0.0.0/8`) or explicit IPs. When set, Gin can safely trust `X-Forwarded-For`/`X-Forwarded-Proto` from those sources. |
+
+Build metadata variables are available as runtime defaults (and are commonly set at image build time):
+- `SERVICE_NAME` (default: `golang-gin-app`)
+- `VERSION` (default: `0.0.0-dev`)
+- `BUILD_TIME` (default: `unknown`)
+
+### OpenTelemetry env vars (from `.env.*`)
+
+The repo env files configure:
+
+#### `.env.development`
+Tracing is disabled explicitly:
+- `OTEL_TRACES_EXPORTER=none`
+- `OTEL_METRICS_EXPORTER=none`
+- `OTEL_LOGS_EXPORTER=none`
+
+#### `.env.integration` / `.env.staging`
+Traces are exported to Alloy (OTLP/HTTP protobuf), logs/metrics exporters remain disabled:
+- `OTEL_SERVICE_NAME=golang-gin-app`
+- `OTEL_TRACES_EXPORTER=otlp`
+- `OTEL_METRICS_EXPORTER=none`
+- `OTEL_LOGS_EXPORTER=none`
+- `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://alloy:4318/v1/traces`
+- `OTEL_TRACES_SAMPLER=always_on`
+
+### Provided env templates
+This module includes:
+- `.env.development`
+- `.env.integration`
+- `.env.staging`
+
+---
+
+## Request processing pipeline
+
+### Server lifecycle
+`cmd/server/main.go`:
+- Loads config and warnings (`LoadConfig`).
+- Initializes slog logging.
+- Initializes tracing (`internal/telemetry/tracing.go`).
+- Builds Gin router + middleware chain.
+- Starts `http.Server` with timeouts and **`MaxHeaderBytes = 1 MiB`**.
+- Gracefully shuts down on SIGINT/SIGTERM using `SHUTDOWN_TIMEOUT`.
+
+### Router + middleware chain
+`internal/server/router.go` configures Gin with:
+- `gin.New()` and `HandleMethodNotAllowed = true`
+- Trusted proxies via `TRUSTED_PROXIES` (invalid values disable proxies and log a warning)
+- Explicit `NoRoute` and `NoMethod` handlers for stable JSON errors
+
+Middleware order (outer → inner), wired in `middleware_chain.go`:
+1. Panic recovery (`GinRecoveryWithSlog`)
+2. Tracing (`otelgin.Middleware(serviceName)`)
+3. Request id (`RequestIDMiddleware`)
+4. Request-id as span attribute (`RequestIDSpanAttrMiddleware`)
+5. Request-scoped logger injection (`InjectRequestLogger`)
+6. Access logs + metrics (`GinSlogMiddleware`)
+7. Error finalizer (`ErrorFinalizer`)
+8. Payload guard (`MaxBodyBytesMiddleware`)
+9. MaxBytes error mapping (`MaxBytesErrorMiddleware`)
+
+---
+
+## Payload validation & limits
+
+### `MAX_BODY_BYTES` (default **1 MiB**)
+- If `MAX_BODY_BYTES <= 0`: limit is disabled.
+- Fast fail:
+  - if `Content-Length > limit` → reject before handler runs with **413** (`payload_too_large`).
+- Streaming enforcement:
+  - wraps `Request.Body` with `http.MaxBytesReader`
+  - `MaxBytesErrorMiddleware` maps `*http.MaxBytesError` to **413** even if thrown during binding/reads.
+
+413 response shape:
+```json
+{ "error": "payload too large", "code": "payload_too_large", "request_id": "…" }
 ```
 
 ---
 
 ## Observability
 
-### Request correlation (`X-Request-ID`)
-- If the client sends `X-Request-ID`, the service reuses it
-- Otherwise, the service generates a new ID
-- The value is always returned in the response header `X-Request-ID`
-- It is included in logs as `request_id`
+### Metrics (Prometheus)
+`/metrics` uses a **module-scoped registry** and includes:
+- Go runtime collector
+- process collector
 
-Example:
+Custom metrics:
+- **`http_requests_total{method,path,status}`**
+- **`http_request_duration_seconds{method,path,status}`**
+- **`build_info{version,build_time}`** (gauge set to 1)
 
-```bash
-curl -i -H "X-Request-ID: demo-123" http://localhost:8081/info
-```
+Label behavior:
+- `path` uses Gin route template (`c.FullPath()`)
+- Unmatched routes use `__unmatched__`
 
-### Structured logging
+Access log suppression:
+- successful `/health`, `/ready`, `/metrics` are **not logged** (but are still counted in metrics).
 
-Logging is done via `log/slog` with a JSON handler:
-- All application logs go to `stdout` as structured JSON
-- HTTP access logs use the `"http_request"` message
-- Infra endpoints (`/health`, `/ready`, `/metrics`) are not logged, to keep noise low
-- Log level is derived from status code:
-  - `2xx/3xx` → `INFO`
-  - `4xx` → `WARN`
-  - `5xx` → `ERROR`
+### Tracing (OpenTelemetry)
+- Server spans via `otelgin.Middleware`.
+- Request id attached to span as attribute `request_id`.
 
----
+Exporter is configured via standard OTel env vars; repo env files typically set:
+- `OTEL_TRACES_EXPORTER=otlp`
+- `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://alloy:4318/v1/traces`
+- `OTEL_TRACES_SAMPLER=always_on`
 
-### Prometheus Metrics
-
-Metrics are provided via `github.com/prometheus/client_golang` and exposed on `/metrics`:
-- `http_requests_total{service,method,path,status}`
-- `http_request_duration_seconds{service,method,path,status}`
-- `build_info{service,version,build_time}` (value always `1`)
-- Standard `go_*` and `process_*` metrics
-
-**Important**: `path` is a stable label:
-- For matched routes it is the Gin route template (e.g. `/info`)
-- For unmatched routes (404s) it is `__unmatched__` to prevent label cardinality blowups
+### Logs
+Access logs are JSON and include request + correlation fields (request id and trace/span ids when available).
+In the repo stack, container logs are shipped via Docker → Alloy → Loki.
 
 ---
 
-## Configuration
+## Error utilities
 
-Configuration is driven by environment variables and validated on startup (`Config.Validate()`).
-
-### Core env vars
-
-| Variable              | Default   | Description                                               |
-| --------------------- | --------- | --------------------------------------------------------- |
-| `GIN_MODE`            | `release` | Gin mode: `debug`, `release`, or `test`                   |
-| `HOST`                | `0.0.0.0` | Listen address                                            |
-| `PORT`                | `8080`    | Listen port (1–65535)                                     |
-| `LOG_LEVEL`           | `info`    | `debug`, `info`, `warn`, `warning`, `error`               |
-| `READ_TIMEOUT`        | `5s`      | `http.Server.ReadTimeout` (Go duration string)            |
-| `WRITE_TIMEOUT`       | `10s`     | `http.Server.WriteTimeout`                                |
-| `READ_HEADER_TIMEOUT` | `2s`      | `http.Server.ReadHeaderTimeout`                           |
-| `IDLE_TIMEOUT`        | `120s`    | `http.Server.IdleTimeout`                                 |
-| `SHUTDOWN_TIMEOUT`    | `5s`      | Graceful shutdown timeout when SIGINT/SIGTERM is received |
-| `TRUSTED_PROXIES`     | (empty)   | Comma-separated list of trusted proxy IPs/CIDRs           |
-
-Validation rules include:
-- `GIN_MODE` must be one of `debug`, `release`, `test`
-- `HOST` must not be empty
-- `PORT` must be a valid TCP port (1–65535)
-- All timeouts must be `> 0`
-
-### Trusted proxies (client IP correctness)
-
-By default, the service does not trust forwarded headers. If you run behind a reverse proxy (ALB/Nginx), set `TRUSTED_PROXIES` to the proxy network/IPs so `ClientIP()` is accurate.
-
-```bash
-export TRUSTED_PROXIES="10.0.0.0/8,172.16.0.0/12"
-```
-
-### Build metadata
-
-Build metadata is passed at link time and surfaced via `/info` and log records:
-- `ServiceName` (default: `golang-gin-app`)
-- `Version` (default: `0.0.0-dev`)
-- `BuildTime` (default: `unknown`)
-
-The Dockerfile injects these values:
-
-```dockerfile
-RUN go build \
-    -ldflags="-s -w \
-      -X main.ServiceName=${SERVICE_NAME} \
-      -X main.Version=${VERSION} \
-      -X main.BuildTime=${BUILD_TIME}" \
-    -o server ./cmd/server
-```
-
-Verify:
-
-```bash
-curl http://localhost:8081/info
-# => {"service":"golang-gin-app","version":"1.0.0","buildTime":"..."}
-```
-
-### Multi-arch build (optional)
-
-To build multi-arch images (amd64 + arm64) using Docker Buildx:
-
-```bash
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  --build-arg RUN_TESTS=true \
-  --build-arg SERVICE_NAME=golang-gin-app \
-  --build-arg VERSION=1.0.0 \
-  --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -t golang-gin-app:1.0.0 \
-  .
-```
+The module centralizes error JSON creation and finalization:
+- `WriteError` (`errors.go`) produces the stable error shape and sets `X-Request-ID`.
+- `ErrorFinalizer` converts Gin errors into normalized HTTP error responses (without leaking internal error types).
 
 ---
 
-## Testing
+## Operational knobs
 
-Unit and integration-style tests live in `internal/server/server_test.go` and cover:
-- Config parsing and validation (`parseLogLevel`, `parseDurationEnv`, `Config.Validate`, `LoadConfig`)
-- Router and endpoints (`/`, `/info`, `/health`, `/ready`, `/metrics`)
-- Logging middleware behavior: 
-    - infra endpoints increment metrics but do not log
-    - application endpoints produce a `http_request` log
-- Recovery middleware behavior:
-    - panics are caught and result in `500` with a `panic_recovered` log
-- Request ID behavior:
-  - generates `X-Request-ID` if missing
-  - echoes the incoming `X-Request-ID` if provided
-- 404 behavior:
-  - metrics label uses a stable path=**__unmatched__**
+This service uses `net/http` and exposes operational knobs primarily via env-configured server timeouts:
 
-Run all tests:
+- `READ_TIMEOUT`, `WRITE_TIMEOUT`, `READ_HEADER_TIMEOUT`, `IDLE_TIMEOUT` (HTTP server timeouts)
+- `SHUTDOWN_TIMEOUT` (graceful shutdown window)
+- `TRUSTED_PROXIES` (client IP attribution via Gin)
 
+---
+
+## Testing & linting
+
+Unit + integration tests:
 ```bash
+cd golang-gin
 go test ./...
 ```
 
-The Docker build also supports running tests as part of the image build:
+---
+
+## Local CI
+
+This repo provides a **local parity runner** at the repo root: `./.ci-local.sh` (mirrors `.github/workflows/cicd.yaml`).
+
+### Prerequisites
+- bash
+- git (for `git diff --exit-code` checks)
+- **Go 1.25.6**
+- `python3.12` (used by the CI script to enforce coverage thresholds)
+- `gcc` (required for the Go race detector)
+- Network access (to `go install` tools the first time)
+
+### Run the Go module CI checks
+From repo root:
 
 ```bash
-docker build --build-arg RUN_TESTS=true -t golang-gin-app:dev .
+source ./.ci-tool-versions.sh
+./.ci-local.sh go
 ```
 
-Set `RUN_TESTS=false` to skip tests in CI scenarios where you’ve already run them.
+What it runs for this module (in order):
+- `go mod tidy` + `git diff --exit-code -- go.mod go.sum`
+- formatting/import checks: `gofmt -l` and `goimports -l -local "$GO_MODULE"`
+- lint: `golangci-lint run --config=.golangci.yaml ./...`
+- `go vet ./...`
+- tests: `CGO_ENABLED=1 go test ./... -race -shuffle=on -count=1 -coverprofile=coverage.out`
+- coverage gate: **100% statements** (fails if < 100%)
+- (push/tags only) security: `govulncheck -test ./...` (skipped when `CI_EVENT_NAME=pull_request`)
 
----
-
-## Project Structure
-
-```text
-golang-gin/
-├── cmd/
-│   └── server/
-│       └── main.go          # Entry point, wiring config/logging/HTTP server
-├── internal/
-│   └── server/
-│       ├── config.go        # Env-driven config + validation
-│       ├── logger.go        # slog JSON logger setup
-│       ├── metrics.go       # Prometheus registry + metrics
-│       ├── middleware.go    # Request ID + logging + metrics middleware
-│       ├── recovery.go      # Panic recovery middleware
-│       ├── router.go        # Gin router & HTTP endpoints
-│       └── server_test.go   # Tests
-├── Dockerfile               # Multi-stage build, non-root runtime
-├── .dockerignore
-├── .env.dev                 # Dev env config
-├── .env.int                 # Integration env config
-└── .env.prod                # Production env config
+Useful options:
+```bash
+./.ci-local.sh doctor go --summary
+LOG_LEVEL=debug ./.ci-local.sh go
+CI_EVENT_NAME=pull_request ./.ci-local.sh go
 ```
 
 ---
 
-## Notes
+## Container image details
 
-- This service is intentionally minimal on business logic and heavy on **operational patterns**:
-    - health/readiness
-    - metrics
-    - structured logs
-    - request correlation
-    - graceful shutdown
-    - Docker best practices
-- In the full `docker-polyglot-lab` project, there are equivalent services in:
-    - Java + Spring Boot (`/java-springboot`)
-    - Python + Django (`/python-django`)
+### Dockerfile highlights
+- Multi-stage build: Go builder → minimal Alpine runtime
+- `CGO_ENABLED=0` build; embeds build metadata via ldflags (`SERVICE_NAME`, `VERSION`, `BUILD_TIME`)
+- Optional tests in builder stage (controlled by `RUN_TESTS`)
+- Non-root runtime user (**uid=10001**), binary `0555`, `STOPSIGNAL SIGTERM`
 
-This Go service can be used as a template for new Gin-based microservices with production-friendly defaults.
+---
+
+### Build arguments
+| Arg | Default | Purpose |
+|---|---:|---|
+| `GO_VERSION` | `1.25.6` | Go toolchain version for the builder stage. |
+| `ALPINE_VERSION` | `3.23.3` | Alpine version for the builder/runtime base images. |
+| `BUILDPLATFORM` | (auto; empty if not provided by BuildKit) | The platform doing the build (the builder machine), e.g. `linux/amd64`. Used to decide whether it’s safe to run tests with `-race` (only when build == target). |
+| `TARGETPLATFORM` | (auto; empty if not provided by BuildKit) | The **intended output image platform**, e.g. `linux/arm64`. Used to compare against `BUILDPLATFORM` to gate tests. |
+| `TARGETOS` | (auto; empty if not provided by BuildKit) | Target OS part of the platform (e.g. `linux`). Used to set `GOOS=${TARGETOS:-linux}` for cross-compiling. |
+| `TARGETARCH` | (auto; empty if not provided by BuildKit) | Target CPU architecture part of the platform (e.g. `amd64`, `arm64`). Used to set `GOARCH=${TARGETARCH:-amd64}` for cross-compiling. |
+| `RUN_TESTS` | `true` | If `true`, runs `go test` during the build (race only when build platform == target platform). |
+| `TEST_COUNT` | `1` | Passed to `go test -count` to control test repetition. |
+| `SERVICE_NAME` | `golang-gin-app` | Default runtime env + OCI labels (and used by `/info`). |
+| `VERSION` | `dev` | Default runtime env + OCI labels (and used by `/info`). |
+| `BUILD_TIME` | `local` | Default runtime env + OCI labels (and used by `/info`). |
+| `OCI_IMAGE_SOURCE` | "" | Sets OCI label `org.opencontainers.image.source` (typically the repository URL; often populated in CI via `docker/build-push-action` `labels:` or `docker/metadata-action`). |
+| `OCI_IMAGE_REVISION` | "" | Sets OCI label `org.opencontainers.image.revision` (typically the Git commit SHA, e.g. GitHub Actions `GITHUB_SHA`; often populated in CI via `docker/build-push-action` `labels:` or `docker/metadata-action`). |
+
+> Note: BuildKit also provides implicit platform args (`BUILDPLATFORM`, `TARGETPLATFORM`, `TARGETOS`, `TARGETARCH`). The Go Dockerfile uses these to decide when it is safe to run `go test -race` during image builds.
+
+## Implementation map (where to look)
+
+- `cmd/server/main.go` — entrypoint + graceful shutdown
+- `internal/server/router.go` — router + NoRoute/NoMethod
+- `internal/server/middleware_chain.go` — middleware wiring
+- `internal/server/http_middleware.go` — request id, logging, payload limits, metrics
+- `internal/server/routes.go` — endpoints
+- `internal/server/metrics.go` — Prometheus registry + collectors
+- `internal/telemetry/tracing.go` — tracing setup
+- `internal/server/error_finalizer.go` — error normalization
+- `internal/server/recovery.go` — panic recovery
+
+---
+
+## Interactions with other modules
+
+- `/docker` runs this service as `golang-gin-app`, maps it to `127.0.0.1:8081`, scrapes `/metrics`, and routes OTLP traces via Alloy → Tempo.
+- `/java-springboot` and `/python-django` follow the same **health/ready/metrics/info + request-id + OTLP** conventions so dashboards/alerts can be shared.
