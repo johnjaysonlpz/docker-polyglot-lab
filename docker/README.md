@@ -92,7 +92,6 @@ docker compose --project-directory docker \
 
 #### up (WITH secrets)
 ```bash
-BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 APP_ENV=staging APP_VERSION=2.0.0 \
 REGISTRY=docker.io/johnjaysonlopez \
 docker compose --project-directory docker \
@@ -102,7 +101,6 @@ docker compose --project-directory docker \
 
 #### down (WITH secrets; also remove volumes)
 ```bash
-BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 APP_ENV=staging APP_VERSION=2.0.0 \
 REGISTRY=docker.io/johnjaysonlopez \
 docker compose --project-directory docker \
