@@ -20,7 +20,7 @@ func NewMetrics(cfg Config) *Metrics {
 			Name: "http_requests_total",
 			Help: "Total number of HTTP requests processed.",
 		},
-		[]string{"service", "method", "path", "status"},
+		[]string{"method", "path", "status"},
 	)
 
 	httpRequestDurationSeconds := prometheus.NewHistogramVec(
@@ -29,15 +29,15 @@ func NewMetrics(cfg Config) *Metrics {
 			Help:    "HTTP request latencies in seconds.",
 			Buckets: prometheus.DefBuckets,
 		},
-		[]string{"service", "method", "path", "status"},
+		[]string{"method", "path", "status"},
 	)
 
 	buildInfo := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "build_info",
-			Help: "Build information for the service.",
+			Help: "Build information for the service (value always 1).",
 		},
-		[]string{"service", "version", "build_time"},
+		[]string{"version", "build_time"},
 	)
 
 	reg.MustRegister(
@@ -48,7 +48,7 @@ func NewMetrics(cfg Config) *Metrics {
 		buildInfo,
 	)
 
-	buildInfo.WithLabelValues(cfg.ServiceName, cfg.Version, cfg.BuildTime).Set(1)
+	buildInfo.WithLabelValues(cfg.Version, cfg.BuildTime).Set(1)
 
 	return &Metrics{
 		Registry:                   reg,

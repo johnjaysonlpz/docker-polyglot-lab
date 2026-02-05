@@ -1,66 +1,72 @@
+# syntax=docker/dockerfile:1.7
+
+ARG MAVEN_VERSION=3.9.12
+ARG TEMURIN_VERSION=25
+
 # ==============================
 # Stage 1: Build the application
 # ==============================
-FROM maven:3.9-eclipse-temurin-21-alpine AS builder
 
+FROM maven:${MAVEN_VERSION}-eclipse-temurin-${TEMURIN_VERSION}-noble AS builder
 WORKDIR /app
 
-# Build-time arguments (CI/Compose contract):
-# - RUN_TESTS: optional unit/integration tests during image build
 ARG RUN_TESTS=true
 
-# Dependency caching:
-# Copy pom.xml first so dependency download stays cached unless deps change.
 COPY pom.xml ./
 
-# BuildKit cache mount:
-# Persists Maven repo between builds on the same runner/machine.
-RUN --mount=type=cache,target=/root/.m2 \
-    mvn -B -q dependency:go-offline
+RUN --mount=type=cache,target=/root/.m2,sharing=locked \
+    mvn -B -ntp -q dependency:go-offline
 
-# Copy the source code after dependencies are cached.
-COPY src ./src
+COPY . .
 
-# Build the jar (optionally running tests).
-RUN --mount=type=cache,target=/root/.m2 \
-    if [ "$RUN_TESTS" = "true" ]; then \
-      mvn -B clean package; \
+RUN --mount=type=cache,target=/root/.m2,sharing=locked \
+    set -eu; \
+    if [ -x "./mvnw" ]; then MVN="./mvnw"; else MVN="mvn"; fi; \
+    if [ "${RUN_TESTS}" = "true" ]; then \
+      ${MVN} -B -ntp clean package; \
     else \
-      mvn -B -DskipTests clean package; \
+      ${MVN} -B -ntp -DskipTests clean package; \
     fi
 
-# Produce a stable artifact name for the runtime stage (/app/app.jar).
-# Spring Boot builds can leave extra jars like:
-# - *.jar.original (pre-repackage)
-# - *-sources.jar / *-javadoc.jar
-# We pick the runnable jar and copy it to a stable path used by runtime COPY.
 RUN set -eu; \
-    JAR="$(ls -1 target/*.jar \
-      | grep -Ev '(original|sources|javadoc|tests)' \
-      | head -n 1)"; \
-    test -n "$JAR"; \
-    echo "Selected jar: $JAR"; \
-    cp "$JAR" /app/app.jar
-
+    JAR="/app/target/app.jar"; \
+    test -f "${JAR}"; \
+    mkdir -p /app/extracted; \
+    java -Djarmode=layertools -jar "${JAR}" extract --destination /app/extracted
 
 # ==============================
 # Stage 2: Runtime image
 # ==============================
-FROM eclipse-temurin:21-jre-alpine
 
-# Runtime packages:
-# - curl: used by container HEALTHCHECK
-# - ca-certificates: enables outbound TLS trust store
-RUN apk add --no-cache curl ca-certificates
+FROM eclipse-temurin:${TEMURIN_VERSION}-jre-noble
+WORKDIR /app
 
-# Build-time args re-declared in runtime stage (used for labels + ENV defaults).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 ARG SERVICE_NAME=java-springboot-app
 ARG VERSION=dev
 ARG BUILD_TIME=local
 ARG OCI_IMAGE_SOURCE=""
 ARG OCI_IMAGE_REVISION=""
 
-# OCI labels (traceability):
+ARG OTEL_JAVA_AGENT_VERSION=2.24.0
+ARG OTEL_JAVA_AGENT_SHA256=5c48cd48f9907f824214e22f14a28375c92613a94b0cf98381997e0a678220ce
+
+RUN set -eu; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends curl; \
+    rm -rf /var/lib/apt/lists/*; \
+    mkdir -p /otel; \
+    curl -fsSL -o /otel/opentelemetry-javaagent.jar \
+      "https://repo1.maven.org/maven2/io/opentelemetry/javaagent/opentelemetry-javaagent/${OTEL_JAVA_AGENT_VERSION}/opentelemetry-javaagent-${OTEL_JAVA_AGENT_VERSION}.jar"; \
+    echo "${OTEL_JAVA_AGENT_SHA256}  /otel/opentelemetry-javaagent.jar" | sha256sum -c -; \
+    chmod 0444 /otel/opentelemetry-javaagent.jar; \
+    apt-get purge -y curl; \
+    apt-get autoremove -y; \
+    rm -rf /var/lib/apt/lists/*
+
 LABEL org.opencontainers.image.title="${SERVICE_NAME}" \
       org.opencontainers.image.description="Polyglot lab - Java + Spring Boot HTTP service" \
       org.opencontainers.image.version="${VERSION}" \
@@ -69,37 +75,34 @@ LABEL org.opencontainers.image.title="${SERVICE_NAME}" \
       org.opencontainers.image.source="${OCI_IMAGE_SOURCE}" \
       org.opencontainers.image.revision="${OCI_IMAGE_REVISION}" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.authors="John Jayson Lopez"
+      org.opencontainers.image.authors="John Jayson Lopez" \
+      org.opencontainers.image.base.name="eclipse-temurin:${TEMURIN_VERSION}-jre-noble"
 
-# Runtime env defaults (overridable via Compose):
-# - JAVA_TOOL_OPTIONS is respected by the JVM automatically (no wrapper script).
-# - Container-friendly memory tuning + fail-fast on OOM.
-# - PORT + build metadata are exposed for /info + metrics and runtime debugging parity.
-ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75.0 -XX:InitialRAMPercentage=50.0 -XX:+ExitOnOutOfMemoryError" \
-    PORT=8080 \
+ENV PORT=8080 \
     SERVICE_NAME=${SERVICE_NAME} \
     VERSION=${VERSION} \
-    BUILD_TIME=${BUILD_TIME}
+    BUILD_TIME=${BUILD_TIME} \
+    OTEL_JAVAAGENT_ENABLED=true \
+    OTEL_LOGS_EXPORTER=none \
+    OTEL_METRICS_EXPORTER=none \
+    OTEL_TRACES_EXPORTER=true
 
-# Non-root runtime user (security posture):
-RUN addgroup -g 10001 appgroup \
-    && adduser -D -u 10001 -G appgroup appuser
+ENV JAVA_TOOL_OPTIONS_BASE="-XX:MaxRAMPercentage=75.0 -XX:InitialRAMPercentage=50.0 -XX:+ExitOnOutOfMemoryError"
 
-WORKDIR /app
+RUN groupadd -g 10001 appgroup \
+    && useradd -u 10001 -g 10001 -m -s /usr/sbin/nologin appuser
 
-# Copy the packaged jar from builder using the stable name.
-# --chown avoids permission issues when running as non-root.
-COPY --chown=appuser:appgroup --from=builder /app/app.jar ./app.jar
+COPY --chown=appuser:appgroup --from=builder /app/extracted/dependencies/ ./
+COPY --chown=appuser:appgroup --from=builder /app/extracted/spring-boot-loader/ ./
+COPY --chown=appuser:appgroup --from=builder /app/extracted/snapshot-dependencies/ ./
+COPY --chown=appuser:appgroup --from=builder /app/extracted/application/ ./
 
-USER appuser
+COPY --chown=appuser:appgroup entrypoint.sh /app/entrypoint.sh
+RUN chmod 0555 /app/entrypoint.sh
 
 EXPOSE 8080
+USER appuser
+STOPSIGNAL SIGTERM
 
-# Container liveness:
-# Use 127.0.0.1 so healthcheck doesn't depend on DNS/networking.
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD curl -fsS http://127.0.0.1:${PORT}/health || exit 1
-
-# Entrypoint (exec form):
-# No shell; SIGTERM is delivered directly to the JVM process.
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["java", "org.springframework.boot.loader.launch.JarLauncher"]

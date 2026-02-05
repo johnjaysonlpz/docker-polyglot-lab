@@ -1,8 +1,7 @@
 package com.github.johnjaysonlpz.dockerpolyglotlab.javaspringboot.web;
 
-import java.util.Map;
-
 import com.github.johnjaysonlpz.dockerpolyglotlab.javaspringboot.config.ServiceProperties;
+import java.util.Map;
 import org.springframework.boot.availability.ApplicationAvailability;
 import org.springframework.boot.availability.LivenessState;
 import org.springframework.boot.availability.ReadinessState;
@@ -14,46 +13,42 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class InfraController {
 
-    private final ServiceProperties props;
-    private final ApplicationAvailability availability;
+  private final ServiceProperties props;
+  private final ApplicationAvailability availability;
 
-    public InfraController(
-        ServiceProperties props,
-        ApplicationAvailability availability
-    ) {
-        this.props = props;
-        this.availability = availability;
-    }
+  public InfraController(ServiceProperties props, ApplicationAvailability availability) {
+    this.props = props;
+    this.availability = availability;
+  }
 
-    @GetMapping("/")
-    public ResponseEntity<String> root() {
-        return ResponseEntity.ok("java-springboot-app is running (Java + Spring Boot)\n");
-    }
+  @GetMapping("/")
+  public ResponseEntity<String> root() {
+    return ResponseEntity.ok("java-springboot-app is running (Java + Spring Boot)\n");
+  }
 
-    @GetMapping("/info")
-    public Map<String, String> info() {
-        return Map.of(
-            "service", props.getServiceName(),
-            "version", props.getVersion(),
-            "buildTime", props.getBuildTime()
-        );
-    }
+  @GetMapping("/info")
+  public Map<String, String> info() {
+    return Map.of(
+        "service", props.getServiceName(),
+        "version", props.getVersion(),
+        "build_time", props.getBuildTime());
+  }
 
-    @GetMapping("/health")
-    public ResponseEntity<Void> health() {
-        LivenessState state = availability.getLivenessState();
-        HttpStatus status = (state == LivenessState.CORRECT)
-            ? HttpStatus.OK
-            : HttpStatus.INTERNAL_SERVER_ERROR;
-        return ResponseEntity.status(status).build();
-    }
+  @GetMapping("/health")
+  public ResponseEntity<Void> health() {
+    LivenessState state = availability.getLivenessState();
+    HttpStatus status =
+        (state == LivenessState.CORRECT) ? HttpStatus.OK : HttpStatus.INTERNAL_SERVER_ERROR;
+    return ResponseEntity.status(status).build();
+  }
 
-    @GetMapping("/ready")
-    public ResponseEntity<Void> ready() {
-        ReadinessState state = availability.getReadinessState();
-        HttpStatus status = (state == ReadinessState.ACCEPTING_TRAFFIC)
+  @GetMapping("/ready")
+  public ResponseEntity<Void> ready() {
+    ReadinessState state = availability.getReadinessState();
+    HttpStatus status =
+        (state == ReadinessState.ACCEPTING_TRAFFIC)
             ? HttpStatus.OK
             : HttpStatus.SERVICE_UNAVAILABLE;
-        return ResponseEntity.status(status).build();
-    }
+    return ResponseEntity.status(status).build();
+  }
 }

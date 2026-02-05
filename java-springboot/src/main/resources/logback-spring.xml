@@ -1,29 +1,64 @@
 <configuration scan="false">
 
+    <statusListener class="ch.qos.logback.core.status.NopStatusListener"/>
+
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
     <springProperty scope="context" name="ROOT_LOG_LEVEL" source="LOG_LEVEL" defaultValue="INFO"/>
 
+    <springProperty scope="context" name="SERVICE_NAME" source="SERVICE_NAME" defaultValue="java-springboot-app"/>
+    <springProperty scope="context" name="VERSION" source="VERSION" defaultValue="0.0.0-dev"/>
+    <springProperty scope="context" name="BUILD_TIME" source="BUILD_TIME" defaultValue="unknown"/>
+
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
-            <fieldNames>
-                <timestamp>@timestamp</timestamp>
-                <level>level</level>
-                <thread>thread_name</thread>
-                <logger>logger_name</logger>
-                <message>message</message>
-            </fieldNames>
+        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+            <providers>
 
-            <includeMdc>true</includeMdc>
-            <includeStructuredArguments>true</includeStructuredArguments>
-            <includeNonStructuredArguments>false</includeNonStructuredArguments>
+                <timestamp>
+                    <fieldName>time</fieldName>
+                    <timeZone>UTC</timeZone>
+                </timestamp>
 
-            <throwableConverter class="net.logstash.logback.stacktrace.ShortenedThrowableConverter">
-                <maxDepthPerThrowable>30</maxDepthPerThrowable>
-                <maxLength>8192</maxLength>
-                <shortenedClassNameLength>40</shortenedClassNameLength>
-                <rootCauseFirst>true</rootCauseFirst>
-            </throwableConverter>
+                <logLevel>
+                    <fieldName>level</fieldName>
+                </logLevel>
+
+                <message>
+                    <fieldName>msg</fieldName>
+                </message>
+
+                <pattern>
+                    <pattern>{"service":"${SERVICE_NAME}","version":"${VERSION}","build_time":"${BUILD_TIME}"}</pattern>
+                    <omitEmptyFields>true</omitEmptyFields>
+                </pattern>
+
+                <pattern>
+                    <pattern>{"request_id":"%X{request_id}","trace_id":"%X{trace_id}","span_id":"%X{span_id}"}</pattern>
+                    <omitEmptyFields>true</omitEmptyFields>
+                </pattern>
+
+                <mdc>
+                    <excludeMdcKeyName>request_id</excludeMdcKeyName>
+                    <excludeMdcKeyName>trace_id</excludeMdcKeyName>
+                    <excludeMdcKeyName>span_id</excludeMdcKeyName>
+                    <excludeMdcKeyName>trace_flags</excludeMdcKeyName>
+                </mdc>
+
+                <arguments>
+                    <includeStructuredArguments>true</includeStructuredArguments>
+                    <includeNonStructuredArguments>false</includeNonStructuredArguments>
+                </arguments>
+
+                <stackTrace>
+                    <throwableConverter class="net.logstash.logback.stacktrace.ShortenedThrowableConverter">
+                        <maxDepthPerThrowable>30</maxDepthPerThrowable>
+                        <maxLength>8192</maxLength>
+                        <shortenedClassNameLength>40</shortenedClassNameLength>
+                        <rootCauseFirst>true</rootCauseFirst>
+                    </throwableConverter>
+                </stackTrace>
+
+            </providers>
         </encoder>
     </appender>
 

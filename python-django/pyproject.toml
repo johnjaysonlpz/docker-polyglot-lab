@@ -1,0 +1,91 @@
+[project]
+name = "python-django-app"
+version = "0.0.0"
+requires-python = ">=3.12"
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+include = '\.pyi?$'
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+  "app/**/migrations/**",
+  ".venv",
+  "venv",
+  "build",
+  "dist",
+]
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "W",      # pycodestyle/pyflakes
+  "I",                # isort
+  "B",                # flake8-bugbear
+  "UP",               # pyupgrade
+  "SIM",              # flake8-simplify
+  "C4",               # flake8-comprehensions
+  "RUF",              # ruff-specific
+  "DJ",               # flake8-django
+]
+ignore = [
+  "E501",  # black
+]
+fixable = ["ALL"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["django_app", "infra"]
+combine-as-imports = true
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "app"
+plugins = ["mypy_django_plugin.main"]
+
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+show_error_codes = true
+
+strict = true
+
+[tool.django-stubs]
+django_settings_module = "django_app.settings"
+
+[[tool.mypy.overrides]]
+module = [
+  "app.*.migrations.*",
+  "*.migrations.*",
+  "tests.*",
+]
+disallow_untyped_defs = false
+check_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = [
+  "gunicorn.*",
+  "pythonjsonlogger.*",
+]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+omit = [
+  "app/**/migrations/*",
+  "app/manage.py",
+  "app/django_app/asgi.py",
+  "app/django_app/wsgi.py",
+]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = false
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+]

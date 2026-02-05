@@ -20,14 +20,15 @@
 bin/
 dist/
 tmp/
-*.out
 *.test
-coverage*.out
+coverage.out
+govulncheck.txt
 
 # Logs
 *.log
 
 # Dependencies (only if you don't vendor in-image)
+# If you ever switch to vendoring in-image, remove this ignore.
 vendor/
 
 # OS junk
