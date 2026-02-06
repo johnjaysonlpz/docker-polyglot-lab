@@ -4,13 +4,93 @@ A small, production-shaped HTTP service built with **Java 25** and **Spring Boot
 
 **Signals (repo stack):** **traces → Alloy → Tempo**, **metrics → Prometheus**, **logs → Loki**.
 
+> [!TIP]
+> For the repo overview and contracts, see [`../README.md`](../README.md). For Compose stacks and operator commands, see [`../docker/README.md`](../docker/README.md).
+
 ---
+
+## Contents
+
+- [TL;DR](#tldr)
+- [What this service provides](#what-this-service-provides)
+- [HTTP API](#http-api)
+- [Configuration](#configuration)
+- [Request processing pipeline](#request-processing-pipeline)
+- [Payload validation & limits](#payload-validation-limits)
+- [Observability](#observability)
+- [Error utilities](#error-utilities)
+- [Operational knobs](#operational-knobs)
+- [Testing & linting](#testing-linting)
+- [Local CI](#local-ci)
+- [Container image details](#container-image-details)
+- [Implementation map (where to look)](#implementation-map-where-to-look)
+- [Interactions with other modules](#interactions-with-other-modules)
 
 ## TL;DR
 
-### Run locally (without Docker)
+> [!TIP]
+> **Recommended path:** run the full stack (apps + observability) via the canonical Compose entrypoints in [`../docker/README.md#tldr—canonical-entrypoints`](../docker/README.md#tldr--canonical-entrypoints), then use Grafana Explore to validate metrics/logs/traces.
 
-Requires **Java 25.0.2**. Maven wrapper is provided (`./mvnw`).
+### Service contract (quick reference)
+
+| Contract | Value |
+|---|---|
+| **Internal listen** | `0.0.0.0:8080` |
+| **Compose host port** | `127.0.0.1:8082` |
+| **Endpoints** | `/` · `/info` · `/health` · `/ready` · `/metrics` |
+| **Request ID** | `X-Request-ID` (accepted if valid, always returned) |
+| **Env templates** | `.env.development` · `.env.integration` · `.env.staging` |
+
+### Running options (pick one)
+
+<details>
+<summary><strong>Run via the repo Compose stacks (recommended)</strong></summary>
+
+Use the canonical stack entrypoints from [`../docker/README.md#tldr—canonical-entrypoints`](../docker/README.md#tldr--canonical-entrypoints).
+
+**Option A (recommended): run from the repo root** (keeps paths consistent):
+
+```bash
+docker compose --project-directory docker \
+  -f docker/compose.development.yaml \
+  up --build
+
+# or full stack with observability
+docker compose --project-directory docker \
+  -f docker/compose.integration.nosecrets.yaml \
+  up --build
+```
+
+**Option B: run from the `/docker` directory** (works because includes are relative):
+
+```bash
+cd docker
+
+docker compose \
+  -f compose.development.yaml \
+  up --build
+
+# or full stack with observability
+docker compose \
+  -f compose.integration.nosecrets.yaml \
+  up --build
+```
+
+Compose wiring for this service:
+- service name: **`java-springboot-app`**
+- host port: **`127.0.0.1:8082`**
+- healthcheck: `GET http://127.0.0.1:8080/ready`
+- env file selection: `../java-springboot/.env.${APP_ENV:-integration}`
+
+</details>
+
+<details>
+<summary><strong>Run locally (without Docker)</strong></summary>
+
+Requires **Java 25 (Temurin)**. Maven wrapper is provided (`./mvnw`).
+
+> [!NOTE]
+> The Dockerfile uses `eclipse-temurin-25` base images (major-version pinned). If you need patch-level reproducibility locally, align your JDK patch version with the image tag you build from.
 
 ```bash
 cd java-springboot
@@ -26,7 +106,10 @@ curl -i http://127.0.0.1:8080/info
 curl -i http://127.0.0.1:8080/metrics
 ```
 
-### Running with Docker
+</details>
+
+<details>
+<summary><strong>Build + run container image (Docker)</strong></summary>
 
 #### Build the image
 The Dockerfile builds the jar, optionally runs tests, extracts Spring Boot layers, downloads the OTel agent, and injects build metadata:
@@ -58,20 +141,7 @@ docker ps
 docker logs -f java-springboot-app
 ```
 
-### Run via the repo Compose stacks
-From `docker/` in the repo root:
-
-```bash
-docker compose -f compose.development.yaml up --build
-# or full stack with observability
-docker compose -f compose.integration.nosecrets.yaml up --build
-```
-
-Compose wiring for this service:
-- service name: **`java-springboot-app`**
-- host port: **`127.0.0.1:8082`**
-- healthcheck: `GET http://127.0.0.1:8080/ready`
-- env file selection: `../java-springboot/.env.${APP_ENV:-integration}`
+</details>
 
 ---
 
@@ -106,7 +176,9 @@ Compose wiring for this service:
 | GET | `/info` | Build/service metadata (JSON) |
 | GET | `/metrics` | Prometheus scrape endpoint (`text/plain; version=0.0.4; charset=utf-8`) |
 
-#### `/info` response
+<details>
+<summary><strong>Sample: `/info` response</strong></summary>
+
 ```json
 {
   "service": "java-springboot-app",
@@ -115,7 +187,11 @@ Compose wiring for this service:
 }
 ```
 
-#### `/info` logs
+</details>
+
+<details>
+<summary><strong>Sample: `/info` log event (JSON)</strong></summary>
+
 ```json
 {
   "time": "2026-02-03T07:28:22.55809845Z",
@@ -138,8 +214,13 @@ Compose wiring for this service:
 }
 ```
 
+</details>
+
 ### Error response format
 All errors are emitted as:
+<details>
+<summary><strong>Sample: error response JSON</strong></summary>
+
 ```json
 {
   "error": "…",
@@ -147,6 +228,8 @@ All errors are emitted as:
   "request_id": "…"
 }
 ```
+
+</details>
 
 Common codes (explicitly mapped):
 - **400** → `bad_request` (validation/type mismatch)
@@ -186,9 +269,12 @@ This module reads configuration primarily from environment variables:
 | `TOMCAT_INTERNAL_PROXIES` | *(LAN regex)* | trusted proxy allowlist for `RemoteIpValve` (`X-Forwarded-*`) |
 
 Build metadata variables are available as runtime defaults (and are commonly set at image build time):
-- `SERVICE_NAME` (default: `java-springboot-app`)
-- `VERSION` (default: `0.0.0-dev`)
-- `BUILD_TIME` (default: `unknown`)
+
+| Variable | Default | Where it shows up |
+|---|---:|---|
+| `SERVICE_NAME` | `java-springboot-app` | `/info` JSON, logs, (and labels where applicable) |
+| `VERSION` | `0.0.0-dev` | `/info` JSON, logs, `build_info` metric label |
+| `BUILD_TIME` | `unknown` | `/info` JSON, logs, `build_info` metric label |
 
 ### Health / availability env vars (from `.env.*`)
 
@@ -203,6 +289,12 @@ The repo’s `.env.*` files explicitly enable Spring Boot liveness/readiness pro
 > Note: the service’s **primary** probe endpoints are the application routes `GET /health` and `GET /ready` (those use Spring’s `ApplicationAvailability` states). Actuator health/info are still available under `/actuator/*` with limited exposure.
 
 ### OpenTelemetry env vars (from `.env.*`)
+
+> [!NOTE]
+> This repo uses a **hybrid model**: Prometheus scrapes `/metrics`, while traces are exported via OTLP to Alloy.
+
+<details>
+<summary><strong>Click to expand OTel env var examples (development vs integration/staging)</strong></summary>
 
 The OTel Java agent is injected by `entrypoint.sh` in Docker images. The repo env files configure:
 
@@ -233,6 +325,8 @@ This module includes:
 
 ---
 
+</details>
+
 ## Request processing pipeline
 
 ### Spring MVC behavior
@@ -245,7 +339,9 @@ Configured in `application.yaml`:
   - `server.shutdown: graceful`
   - `spring.lifecycle.timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:5s}`
 
-### Filter order (outer → inner)
+<details>
+<summary><strong>Filter order (outer → inner)</strong></summary>
+
 All filters are `OncePerRequestFilter` with explicit `@Order`:
 
 1. **RequestIdFilter**
@@ -262,6 +358,10 @@ All filters are `OncePerRequestFilter` with explicit `@Order`:
 3. **MaxBodyBytesFilter**
    - enforces `MAX_BODY_BYTES`
    - converts limit violations into a consistent 413 JSON response
+
+---
+
+</details>
 
 ---
 
@@ -285,7 +385,21 @@ All filters are `OncePerRequestFilter` with explicit `@Order`:
 
 ## Observability
 
-### Metrics (Prometheus)
+**Signal flow (repo stack):**
+
+- **Metrics:** Prometheus scrapes `GET /metrics`
+- **Traces:** OTLP → **Alloy** → **Tempo**
+- **Logs:** container stdout/stderr → Docker → **Alloy** → **Loki**
+
+| Signal | Boundary | Collected by |
+|---|---|---|
+| **Metrics** | `/metrics` | Prometheus scrape model |
+| **Traces** | OTLP (`4317`/`4318`) | Alloy → Tempo |
+| **Logs** | JSON to stdout/stderr | Alloy → Loki |
+
+<details>
+<summary><strong>Metrics (Prometheus)</strong></summary>
+
 `/metrics` returns the scrape output of a `PrometheusMeterRegistry`.
 
 Custom meters (created on-demand per `{method,path,status}` tag set):
@@ -303,7 +417,11 @@ Path labeling (low cardinality):
 Access log suppression:
 - successful infra paths are **not logged** (but are still counted in metrics).
 
-### Tracing (OpenTelemetry Java Agent)
+</details>
+
+<details>
+<summary><strong>Tracing (OpenTelemetry Java Agent)</strong></summary>
+
 Tracing is handled by the OTel Java agent shipped in the Docker image.
 
 Agent injection behavior:
@@ -323,12 +441,20 @@ Log/trace correlation options commonly set in env:
 - `OTEL_INSTRUMENTATION_LOGBACK_MDC_ENABLED=true`
 - `OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST=X-Request-ID`
 
-### Logs
+</details>
+
+<details>
+<summary><strong>Logs</strong></summary>
+
 - JSON logs via `logback-spring.xml`.
 - Access logs are emitted with message `"http_request"` to logger name `http`.
 - Correlation fields:
   - `request_id` (MDC, always present)
   - `trace_id` / `span_id` when present in MDC (OTel agent + MDC instrumentation)
+
+---
+
+</details>
 
 ---
 
@@ -371,10 +497,15 @@ cd java-springboot
 
 This repo provides a **local parity runner** at the repo root: `./.ci-local.sh` (mirrors `.github/workflows/cicd.yaml`).
 
+> [!NOTE]
+> **Tool versions are pinned in `./.ci-tool-versions.sh`**, which is the **single source of truth** for:
+> - `./.ci-local.sh`
+> - `.github/workflows/cicd.yaml`
+
 ### Prerequisites
 - bash
 - git
-- **Java 25.0.2**
+- **Java 25** (Temurin)
 - Maven (**the CI runner calls `mvn`**, not `./mvnw`)
 - `python3.12` (used by the CI script to parse JaCoCo coverage)
 
@@ -391,6 +522,7 @@ source ./.ci-tool-versions.sh
 What it runs for this module (in order):
 - `mvn -B -ntp verify` (Spotless, SpotBugs, tests, JaCoCo)
 - parses `target/site/jacoco/jacoco.xml` for LINE coverage summary
+- coverage gate: **100% LINE coverage** (fails if < 100%)
 - (push/tags only) OWASP Dependency-Check Maven plugin:
   - requires `NVD_API_KEY`
   - controlled by `DEPENDENCY_CHECK_MAVEN_VERSION` and `DEPENDENCY_CHECK_FAIL_CVSS`
@@ -421,7 +553,7 @@ CI_EVENT_NAME=pull_request ./.ci-local.sh java   # skips Dependency-Check step
 | Arg | Default | Purpose |
 |---|---:|---|
 | `MAVEN_VERSION` | `3.9.12` | Maven builder image version. |
-| `TEMURIN_VERSION` | `25.0.2` | Java/JRE (Temurin) version for builder/runtime images. |
+| `TEMURIN_VERSION` | `25` | Java/JRE (Temurin) version for builder/runtime images. |
 | `RUN_TESTS` | `true` | If `true`, runs `mvn test` during the Docker build. |
 | `SERVICE_NAME` | `java-springboot-app` | Default runtime env + OCI labels (and used by `/info`). |
 | `VERSION` | `dev` | Default runtime env + OCI labels (and used by `/info`). |
@@ -433,21 +565,26 @@ CI_EVENT_NAME=pull_request ./.ci-local.sh java   # skips Dependency-Check step
 
 ## Implementation map (where to look)
 
-- `pom.xml` — dependencies + build plugins (Spotless/SpotBugs/JaCoCo)
-- `mvnw` / `mvnw.cmd` — Maven wrapper scripts
-- `Application.java` — bootstrapping
-- `InfraController.java` — `/`, `/info`, `/health`, `/ready`
-- `MetricsController.java` — `/metrics`
-- `RequestIdFilter.java` — `X-Request-ID` validation + MDC + response header
-- `HttpLoggingFilter.java` — access logs + metrics recording + path labeling
-- `MaxBodyBytesFilter.java` / `PayloadTooLargeException.java` — 413 enforcement
-- `GlobalExceptionHandler.java` / `ErrorResponse.java` — stable JSON errors
-- `MetricsConfiguration.java` / `HttpServerMetrics.java` — registry + meters + SLOs
-- `ServerConfiguration.java` / `ServiceProperties.java` — bind + Tomcat tuning + validation
-- `src/main/resources/application.yaml` — defaults and actuator exposure
-- `src/main/resources/logback-spring.xml` — JSON logging schema
-- `entrypoint.sh` — OTel agent injection
-- `.mvn/jvm.config` — JVM flag `--sun-misc-unsafe-memory-access=allow`
+| Change you want | Where to look |
+|---|---|
+| **`pom.xml`** | dependencies + build plugins (Spotless/SpotBugs/JaCoCo) |
+| **`mvnw` / `mvnw.cmd`** | Maven wrapper scripts |
+| **`Application.java`** | bootstrapping |
+| **`InfraController.java`** | `/`, `/info`, `/health`, `/ready` |
+| **`MetricsController.java`** | `/metrics` |
+| **`RequestIdFilter.java`** | `X-Request-ID` validation + MDC + response header |
+| **`HttpLoggingFilter.java`** | access logs + metrics recording + path labeling |
+| **`MaxBodyBytesFilter.java` / `PayloadTooLargeException.java`** | 413 enforcement |
+| **`GlobalExceptionHandler.java` / `ErrorResponse.java`** | stable JSON errors |
+| **`MetricsConfiguration.java` / `HttpServerMetrics.java`** | registry + meters + SLOs |
+| **`ServerConfiguration.java` / `ServiceProperties.java`** | bind + Tomcat tuning + validation |
+| **`src/main/resources/application.yaml`** | defaults and actuator exposure |
+| **`src/main/resources/logback-spring.xml`** | JSON logging schema |
+| **`entrypoint.sh`** | OTel agent injection |
+| **`.mvn/jvm.config`** | JVM flag `--sun-misc-unsafe-memory-access=allow` |
+
+> [!TIP]
+> Prefer starting with the **request pipeline** (middleware/filter chain), then jump to metrics/logging/tracing wiring.
 
 ---
 

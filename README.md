@@ -7,7 +7,7 @@
 
 ![Go](https://img.shields.io/badge/Go-1.25.6-informational)
 ![Gin](https://img.shields.io/badge/Gin-v1.11.0-informational)
-![Java](https://img.shields.io/badge/Java-25.0.2-informational)
+![Java](https://img.shields.io/badge/Java-25-informational)
 ![Spring%20Boot](https://img.shields.io/badge/Spring%20Boot-4.0.2-informational)
 ![Python](https://img.shields.io/badge/Python-3.12-informational)
 ![Django](https://img.shields.io/badge/Django-6.0.2-informational)
@@ -18,47 +18,202 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/johnjaysonlopez/java-springboot-app)](https://hub.docker.com/r/johnjaysonlopez/java-springboot-app)
 [![Docker Pulls](https://img.shields.io/docker/pulls/johnjaysonlopez/python-django-app)](https://hub.docker.com/r/johnjaysonlopez/python-django-app)
 
+A **polyglot microservices + observability** lab designed to showcase **modern container and operational best practices** and a complete **metrics / logs / traces** pipeline you can run locally — with a structure that maps cleanly to **cloud production patterns**.
 
-A **polyglot microservices + observability** lab built to showcase **modern microservice best practices** and a complete **metrics / logs / traces** pipeline you can run locally — with a structure that also maps cleanly to **cloud production patterns**.
+### Services (polyglot)
 
-It includes three production-minded HTTP services:
-- **Go / Gin** (`golang-gin/`)
-- **Java / Spring Boot** (`java-springboot/`)
-- **Python / Django** (`python-django/`)
+- **Go / Gin** → [`golang-gin/`](golang-gin/)
+- **Java / Spring Boot** → [`java-springboot/`](java-springboot/)
+- **Python / Django** → [`python-django/`](python-django/)
 
-…and a full observability stack:
+### Observability stack
+
 - **Alloy** (OpenTelemetry ingest + Docker log shipping)
 - **Prometheus + Alertmanager** (metrics + alerting)
 - **Loki** (logs)
 - **Tempo** (traces + metrics-generator)
 - **Grafana** (dashboards + Explore)
 
-The canonical “run everything” entrypoint is the **Docker Compose stacks** in [`docker/`](docker/README.md).
+> [!TIP]
+> The canonical “run everything” entrypoints are the **Docker Compose stacks** under [`docker/README.md#tldr—canonical-entrypoints`](docker/README.md#tldr--canonical-entrypoints).
+
+> [!IMPORTANT]
+> **Where to start (fast navigation)**
+> - **Want to run the stack?** Start with [`docker/README.md`](docker/README.md) → **TL;DR — canonical entrypoints**.
+> - **Want to understand the services?** Read the module docs: [`golang-gin/README.md`](golang-gin/README.md), [`java-springboot/README.md`](java-springboot/README.md), [`python-django/README.md`](python-django/README.md).
+> - **Want CI parity and pinned tooling?** Jump to [`#cicd`](#cicd) — `.ci-tool-versions.sh` is the **single source of truth** for local + GitHub CI.
 
 ---
 
-## TL;DR
+## Contents
 
-### Run the full stack (pull images)
+- [What this repo demonstrates](#what-this-repo-demonstrates)
+- [Why a hybrid observability approach](#why-a-hybrid-observability-approach)
+- [Production template for cloud](#production-template-for-cloud)
+- [Quick start](#quick-start)
+- [Endpoints](#endpoints)
+- [Traffic generator](#traffic-generator)
+- [Common operations](#common-operations)
+- [System architecture](#system-architecture)
+- [Service contract](#service-contract)
+- [Environments](#environments)
+- [Secrets bootstrap](#secrets-bootstrap)
+- [CI/CD](#cicd)
+- [Repository structure](#repository-structure)
+- [Versions](#versions)
+- [Troubleshooting](#troubleshooting)
+- [Status](#status)
+- [License](#license)
 
-#### up (NO secrets)
+---
+
+## What this repo demonstrates
+
+This project is intentionally built as a **production-minded reference lab** (not just a demo wiring exercise). It demonstrates:
+
+- **Production containerization patterns**: multi-stage Dockerfiles, slim runtime stages, **non-root execution**, and build metadata injection (e.g., `SERVICE_NAME`, `VERSION`, `BUILD_TIME`).
+- **Operator-facing hardening behaviors**: explicit timeouts + graceful shutdown semantics (`SIGTERM`), request/payload limits (**clear `413` behavior**), trusted proxy controls for correct `X-Forwarded-*` handling, and health/readiness checks enforced via **Compose**.
+- **Composable environment “shapes” with strong local parity**: **development** (apps only), **integration** (apps + observability), and **staging** (registry pulls / “build once, deploy many”) using modular Compose building blocks.
+- **Observability you can rely on**: **Prometheus scrape** for metrics, **JSON logs** shipped via **Alloy → Loki**, and **OTLP traces** via **Alloy → Tempo** — correlated in **Grafana**.
+- **High-signal CI/CD with local parity**: `.ci-tool-versions.sh` is the **single source of truth** for pinned toolchains; it’s consumed by both `.ci-local.sh` and `.github/workflows/cicd.yaml` to minimize “works on my machine” drift. Security/dependency checks are part of the normal workflow.
+
+> [!NOTE]
+> For the implementation details of each item (Dockerfiles, Compose hardening, CI gates, and service-specific behaviors), see the per-module README.md docs.
+---
+
+## Why a hybrid observability approach
+
+This repo intentionally uses the **best model per signal** and correlates everything in **Grafana**:
+
+- **Metrics (Prometheus scrape)**: `/metrics` scraping is simple, reliable, and well-suited for RED/USE-style service signals without forcing a push pipeline.
+- **Traces (OTLP push)**: traces are naturally push-based; services export OTLP to **Alloy**, which batches/routes and forwards to **Tempo**.
+- **Logs (agent-based tailing)**: services emit structured JSON logs to stdout/stderr; **Alloy** tails container logs and ships them to **Loki** without per-app log agents.
+
+**Goal:** *simple where possible, centralized where it pays off*, with clean correlation (request/trace/span IDs).
+
+---
+
+## Production template for cloud
+
+The repo is shaped so it can serve as a **production reference template**:
+
+- **Contracts map cleanly to orchestrators**: `/health` and `/ready` become liveness/readiness probes; `/metrics` remains the Prometheus boundary.
+- **Signal boundaries remain stable**: **OTLP** for traces, **JSON logs** for platform logging collection, and **Prometheus scraping** (or managed Prometheus equivalents).
+- **Staging mirrors real deployments**: **build once, deploy many** via **registry pulls**.
+
+It also bakes in reusable “production-shaped” service and runtime behaviors:
+
+- **Graceful shutdown + timeouts**: clean `SIGTERM` handling and explicit shutdown budgets.
+- **Safety limits by default**: request/payload limits with clear `413` behavior.
+- **Trusted proxy controls**: correct `X-Forwarded-*` handling without spoofable client IP headers.
+- **Hardened containers**: non-root runtime plus Compose-level hardening (healthchecks, cap drops, read-only/tmpfs patterns where applicable).
+- **Build provenance**: `/info` + OCI labels to expose version/build metadata, and repeatable dev → staging workflows.
+
+You can swap Docker Compose for **Kubernetes / ECS / Nomad** while keeping the same operational shape and observability boundaries.
+
+---
+
+## Quick start
+
+> [!IMPORTANT]
+> This repo contains multiple Compose entrypoints. For the full matrix (dev vs. integration vs. staging, secrets vs. no-secrets), read [`docker/README.md#tldr—canonical-entrypoints`](docker/README.md#tldr--canonical-entrypoints).
+
+### Prerequisites
+
+| Type | Requirements |
+|---|---|
+| **Runtime** | Docker Engine / Docker Desktop (recent) + **Docker Compose v2** |
+| **Host ports** | **8081–8083**, **3000**, **9090**, **9093**, **3100**, **3200**, **4317**, **4318**, **12345** |
+| **Recommended** | **4+ CPU**, **6–8GB RAM**, **10GB+ disk** (volumes + images) |
+
+> [!NOTE]
+> All Compose stacks are designed to bind host ports to **`127.0.0.1`** (localhost-only) by default.
+
+### Run the full stack (**pull from Docker Hub Registry**, no secrets)
+
+This is the fastest on-ramp and mirrors **“build once, deploy many.”**
+
+#### Step 1 — create `docker/.env` (optional but recommended)
+
+Because Compose is invoked with `--project-directory docker`, the natural place to keep env vars is `docker/.env` (**do not commit**).
+
 ```bash
-APP_ENV=staging APP_VERSION=2.0.0 \
-REGISTRY=docker.io/johnjaysonlopez \
+cat > docker/.env <<'EOF'
+APP_ENV=staging
+APP_VERSION=2.0.0
+REGISTRY=docker.io/johnjaysonlopez
+EOF
+```
+
+#### Step 2 — start the stack
+
+```bash
 docker compose --project-directory docker \
-  -p polyglot-lab-staging -f docker/compose.staging.nosecrets.yaml \
+  -p polyglot-lab-staging \
+  -f docker/compose.staging.nosecrets.yaml \
   up --pull always --remove-orphans
 ```
 
-Open:
-- Go (Gin): `http://127.0.0.1:8081`
-- Java (Spring Boot): `http://127.0.0.1:8082`
-- Python (Django): `http://127.0.0.1:8083`
-- Grafana: `http://127.0.0.1:3000`
+> [!TIP]
+> Run detached: add `-d` to the `up` command.
 
-### Generate traffic (to light up dashboards)
+#### Step 3 — verify the services are alive
 
-If the system is idle, generate a little traffic so **metrics/logs/traces** populate quickly:
+```bash
+curl -fsS http://127.0.0.1:8081/health >/dev/null && echo "svc-a OK"
+curl -fsS http://127.0.0.1:8082/health >/dev/null && echo "svc-b OK"
+curl -fsS http://127.0.0.1:8083/health >/dev/null && echo "svc-c OK"
+```
+
+#### Step 4 — open Grafana (and check scraping)
+
+- **Grafana**: `http://127.0.0.1:3000`
+- **Prometheus targets**: `http://127.0.0.1:9090/targets`
+
+**Grafana credentials** depend on which Compose entrypoint you use:
+
+- **No-secrets stacks**: Grafana typically uses upstream defaults **`admin` / `admin`** *unless* overridden in Compose.
+- **Secrets-enabled stacks**: credentials come from Docker secrets created by [`.bootstrap-local.sh`](#secrets-bootstrap).
+
+> [!TIP]
+> If you can’t sign in, check [`docker/README.md#operational-knobs`](docker/README.md#operational-knobs) and/or inspect the running Grafana container configuration.
+
+---
+
+## Endpoints
+
+### Services
+
+| Component | URL |
+|---|---|
+| **Go (Gin)** | `http://127.0.0.1:8081` |
+| **Java (Spring Boot)** | `http://127.0.0.1:8082` |
+| **Python (Django)** | `http://127.0.0.1:8083` |
+
+### Observability
+
+| Component | URL |
+|---|---|
+| **Grafana** | `http://127.0.0.1:3000` |
+| **Prometheus** | `http://127.0.0.1:9090` |
+| **Alertmanager** | `http://127.0.0.1:9093` |
+| **Tempo (query/frontend)** | `http://127.0.0.1:3200` |
+| **Loki** | `http://127.0.0.1:3100` |
+| **Alloy (OTLP/gRPC ingest)** | `http://127.0.0.1:4317` |
+| **Alloy (OTLP/HTTP ingest)** | `http://127.0.0.1:4318` |
+| **Alloy UI/status** | `http://127.0.0.1:12345` |
+
+---
+
+## Traffic generator
+
+If the system is idle, generate traffic so **metrics / logs / traces** populate quickly.
+
+> [!TIP]
+> After running this, check **Prometheus targets** and **Grafana Explore** (Prometheus / Loki / Tempo).
+
+<details>
+<summary><strong>Click to expand traffic generator script</strong></summary>
 
 ```bash
 TARGETS=(
@@ -66,17 +221,17 @@ TARGETS=(
   "svc-b root (200)|http://127.0.0.1:8082/"
   "svc-c root (200)|http://127.0.0.1:8083/"
 
-  "svc-a info (200)|http://127.0.0.1:8081/info"
-  "svc-b info (200)|http://127.0.0.1:8082/info"
-  "svc-c info (200)|http://127.0.0.1:8083/info"
-
   "svc-a WRONG /nope (404)|http://127.0.0.1:8081/nope"
   "svc-b WRONG /nope (404)|http://127.0.0.1:8082/nope"
   "svc-c WRONG /nope (404)|http://127.0.0.1:8083/nope"
 
-  "svc-a WRONG /infoo (404)|http://127.0.0.1:8081/infoo"
-  "svc-b WRONG /infoo (404)|http://127.0.0.1:8082/infoo"
-  "svc-c WRONG /infoo (404)|http://127.0.0.1:8083/infoo"
+  "svc-a info (200)|http://127.0.0.1:8081/info"
+  "svc-b info (200)|http://127.0.0.1:8082/info"
+  "svc-c info (200)|http://127.0.0.1:8083/info"
+
+  "svc-a WRONG /infoo (404)|http://127.0.0.1:8081/asd"
+  "svc-b WRONG /infoo (404)|http://127.0.0.1:8082/asd"
+  "svc-c WRONG /infoo (404)|http://127.0.0.1:8083/asd"
 )
 
 REQUESTS_PER_TARGET=25
@@ -91,72 +246,78 @@ for entry in "${TARGETS[@]}"; do
 done
 ```
 
-Then check:
-- **Prometheus** targets: `http://127.0.0.1:9090/targets`
-- **Grafana**: `http://127.0.0.1:3000` → Dashboards/Explore (Prometheus/Loki/Tempo)
+</details>
 
-> For **staging pulls**, **secrets-enabled** stacks, and the full operational guide, see [`docker/README.md`](docker/README.md).
+Then validate:
 
----
-
-## Highlights
-
-### Consistent service contract across Go/Gin, Java/Spring Boot, Python/Django
-
-All three services expose the same HTTP surface area:
-- `GET /`        — banner (“service is running”)
-- `GET /info`    — build/service metadata
-- `GET /health`  — liveness probe
-- `GET /ready`   — readiness probe (used by **Docker Compose** healthchecks)
-- `GET /metrics` — Prometheus metrics (text format)
-
-This consistency is intentional: it keeps health checks, scraping, dashboards, and alerts predictable in a polyglot stack.
-
-### What this repo is designed to demonstrate
-
-- **Production-minded containerization (real-world patterns)**
-  - multi-stage Dockerfiles
-  - build metadata injection (`SERVICE_NAME`, `VERSION`, `BUILD_TIME`)
-  - apps run as **non-root** users (unprivileged UID/GID)
-  - slim runtime stages to reduce attack surface
-
-- **Concrete production-hardening behaviors (operator-facing)**
-  - **Timeouts + graceful shutdown semantics** are explicitly configured and validated per service (server timeouts, shutdown timeouts, clean termination on `SIGTERM`).
-  - **Payload limits** are enforced at the edge of each service (request body sizing / upload limits) with clear 413 behavior.
-  - **Trusted proxy controls** (`TRUSTED_PROXIES` / Tomcat RemoteIpValve settings) prevent spoofed client IPs and ensure correct `X-Forwarded-*` handling.
-  - **Non-root runtime**: app containers run as unprivileged UID/GID; hardening is reinforced via Compose (cap drops, tmpfs/read-only patterns where applicable).
-  - **Build provenance**: images embed build metadata (`SERVICE_NAME`, `VERSION`, `BUILD_TIME`) surfaced via `GET /info` and exported via metrics labels where applicable.
-  - **CI gates + reproducibility**: local CI parity runner (`.ci-local.sh`) + pinned toolchain versions (`.ci-tool-versions.sh`) to minimize “works on my machine” drift.
-  - **Security scanning** is part of the normal workflow (language-specific vuln/dependency scanning + CI enforcement).
-
-- **Composable environments with strong local parity**
-  - **development** (apps only; fastest loop)
-  - **integration** (apps + full observability)
-  - **staging (prod-like)** stacks that support **registry pulls** (build once, deploy many)
-  - modular Compose using `include:` building blocks
-
-- **Operational correctness and hardening where it belongs**
-  - Runtime hardening and healthchecks are enforced via **Compose** (cap drops, tmpfs/read-only patterns where applicable; /ready healthcheck), not embedded in the Dockerfile.
-  - a shared `toolbox-init` pattern stages a tiny BusyBox helper for healthchecks without bloating app images
-  - secrets-enabled stacks use overlays + a safe bootstrap workflow
-
-- **Observability you can trust**
-  - **metrics**: Prometheus scraping across all services
-  - **logs**: JSON logs to stdout/stderr, shipped via Alloy → Loki
-  - **traces**: OTLP → Alloy → Tempo, queryable in Grafana
-  - stable metrics labels to avoid cardinality blowups (e.g., `**path="__unmatched__"**` for 404s; template paths for labels)
-
-- **High-signal CI/CD with local parity**
-  - `.ci-local.sh` mirrors the CI intent locally
-  - `.ci-tool-versions.sh` pins tool versions for reproducibility
-  - security scanning + dependency checks are integrated
-  - strong test + coverage expectations (designed to detect drift aggressively)
+- **Prometheus targets:** `http://127.0.0.1:9090/targets`
+- **Grafana:** `http://127.0.0.1:3000` → **Dashboards** / **Explore** (Prometheus / Loki / Tempo)
 
 ---
 
-## System architecture (full stack)
+## Common operations
 
-> Scope: this diagram represents the **full stack** (integration/staging) runs where observability is enabled. The **apps-only** development stack does not start Prometheus/Grafana/Loki/Tempo/Alertmanager/Alloy.
+> [!TIP]
+> For the full operator/runbook commands (including `ps`, `logs`, `restart`, and `config` rendering), see [`docker/README.md#common-operator-commands`](docker/README.md#common-operator-commands).
+
+<details>
+<summary><strong>Click to expand quick common operations (root convenience)</strong></summary>
+
+> [!TIP]
+> The examples below use the **staging / no-secrets** entrypoint. Keep `-p` and `-f` consistent per run, so you’re operating on the same project.
+
+### Stop the stack
+
+```bash
+docker compose --project-directory docker \
+  -p polyglot-lab-staging \
+  -f docker/compose.staging.nosecrets.yaml \
+  down --remove-orphans
+```
+
+### Full reset (removes volumes; destructive)
+
+Use this if you want a clean slate for Prometheus/Loki/Tempo/Grafana state.
+
+```bash
+docker compose --project-directory docker \
+  -p polyglot-lab-staging \
+  -f docker/compose.staging.nosecrets.yaml \
+  down -v --remove-orphans
+```
+
+### See what’s running
+
+```bash
+docker compose --project-directory docker \
+  -p polyglot-lab-staging \
+  -f docker/compose.staging.nosecrets.yaml \
+  ps
+```
+
+### Tail logs
+
+```bash
+docker compose --project-directory docker \
+  -p polyglot-lab-staging \
+  -f docker/compose.staging.nosecrets.yaml \
+  logs -f --tail=200
+```
+
+> [!NOTE]
+> If you forget a service name, `docker compose ... ps` is the fastest way to discover it.
+
+---
+
+</details>
+
+## System architecture
+
+> [!NOTE]
+> Scope: this diagram represents **integration/staging** runs where observability is enabled. The **apps-only** development stack does not start Prometheus/Grafana/Loki/Tempo/Alertmanager/Alloy.
+
+<details>
+<summary><strong>Click to expand architecture diagram</strong></summary>
 
 ```text
 User/Operator
@@ -203,93 +364,76 @@ HEALTHCHECKS:
 toolbox-init (busybox to shared volume) --> healthchecks --> services (apps, Prom, AM, TempoQ, Grafana)
 ```
 
-Init helpers (run inside the stack):
+</details>
+
+### Init helpers (run inside the stack)
+
 - `toolbox-init` — stages BusyBox into the shared `toolbox` volume for healthchecks
 - `loki-init` — prepares Loki runtime directories/permissions for the volume-backed store
 - `tempo-init` — prepares Tempo runtime directories/permissions for the volume-backed store
 
-For a deeper breakdown (compose entrypoints, overlays, healthchecks, and secrets workflow), see [`docker/README.md`](docker/README.md).
+For deeper breakdowns (compose entrypoints, overlays, healthchecks, and secrets workflow), see [`docker/README.md#compose-layout`](docker/README.md#compose-layout) and [`docker/README.md#implementation-map-where-to-look`](docker/README.md#implementation-map-where-to-look).
 
 ---
 
-## Module documentation
+## Service contract
 
-- [`docker/README.md`](docker/README.md) — Compose stacks, overlays, staging pulls, and observability wiring
-- [`golang-gin/README.md`](golang-gin/README.md) — Go service API + observability contract + container image details
-- [`java-springboot/README.md`](java-springboot/README.md) — Java service API + observability contract + operational knobs + container image details
-- [`python-django/README.md`](python-django/README.md) — Django service API + observability contract + operational knobs + container image details
+All three services expose the same HTTP surface area:
 
----
+| Endpoint | Meaning | Used by |
+|---|---|---|
+| `GET /` | Banner (“service is running”) | Humans / smoke checks |
+| `GET /info` | Build/service metadata | Humans / dashboards |
+| `GET /health` | **Liveness** probe | Orchestrator liveness checks |
+| `GET /ready` | **Readiness** probe | Compose healthchecks / orchestrator readiness |
+| `GET /metrics` | Prometheus metrics (text format) | Prometheus scraping / alerting |
 
-## Why a hybrid observability approach
-
-This repo intentionally uses the **best model per signal**, then correlates everything in Grafana:
-
-- **Metrics: Prometheus scrape model**
-  - `/metrics` scraping is simple, reliable, and scales well for RED/USE signals.
-  - it avoids pushing metrics through a collector unless you actually need that architecture.
-
-- **Traces: OTLP push model**
-  - traces are naturally push-based.
-  - services export OTLP to **Alloy**, which batches/routes, then forwards to **Tempo**.
-
-- **Logs: agent-based tailing**
-  - logs are emitted as JSON to stdout/stderr.
-  - **Alloy** tails container logs (via Docker) and ships them to **Loki** without per-app log agents.
-
-The goal is pragmatic: **simple where possible, centralized where it pays off**, with a clean correlation story (request ID + trace/span IDs).
+> [!NOTE]
+> This consistency is intentional: it keeps health checks, scraping, dashboards, and alerts predictable in a polyglot stack.
 
 ---
 
-## Production template for cloud
+## Environments
 
-This repo is structured so it can serve as a **production reference template**, not just a demo:
+This repo is deliberately structured around environment “shapes” that mirror real deployments:
 
-- Replace Compose with **Kubernetes** (or ECS/Nomad) while keeping the same contracts:
-  - readiness/liveness probes map directly to `/ready` and `/health`
-  - Prometheus scrapes services (or use managed Prometheus + scrape configs)
-  - Alloy becomes a DaemonSet/sidecar/agent (or a managed collector)
-  - Tempo/Loki/Grafana can be self-hosted or swapped for managed equivalents
+- **development** — apps only; fastest inner-loop
+- **integration** — apps + full observability (builds locally; typically no registry pulls)
+- **staging (prod-like)** — pulls prebuilt images from a registry; mirrors production **“build once, deploy many”**
 
-- Keep the same “shape”:
-  - `/metrics` remains the metrics boundary
-  - OTLP remains the trace boundary
-  - JSON logs remain the log boundary (collected by platform logging)
-
-- **Staging “pull images”** already exists here (registry images + prod-like stack), mirroring how production deployments operate: **build once, deploy many**.
-
----
-
-## Running the stack
-
-All authoritative run commands (including repo-root staging pulls and secrets-enabled stacks) are documented in:
-- [`docker/README.md`](docker/README.md)
+All authoritative run commands (including secrets-enabled stacks and overlays) live in:
+- [`docker/README.md#tldr—canonical-entrypoints`](docker/README.md#tldr--canonical-entrypoints)
+- [`docker/README.md#common-operator-commands`](docker/README.md#common-operator-commands)
 
 Common entrypoints:
-- **apps-only (local builds):** `docker/compose.development.yaml`
-- **apps + observability (no secrets overlays):** `docker/compose.integration.nosecrets.yaml`
-- **apps + observability (with secrets overlays):** `docker/compose.integration.yaml`
-- **staging pulls (no secrets / with secrets):** `docker/compose.staging*.yaml`
+
+- **Apps-only (local builds):** `docker/compose.development.yaml`
+- **Apps + observability (no secrets overlays):** `docker/compose.integration.nosecrets.yaml`
+- **Apps + observability (with secrets overlays):** `docker/compose.integration.yaml`
+- **Staging pulls (no secrets / with secrets):** `docker/compose.staging*.yaml`
 
 ---
 
-## Secrets and local bootstrap
+## Secrets bootstrap
 
 ### `.bootstrap-local.sh` (secrets + permissions)
 
 If you use the **secrets-enabled** Compose entrypoints:
+
 - `docker/compose.integration.yaml`
 - `docker/compose.staging.yaml`
 
-…run the bootstrap script once from the repo root. It creates the expected Docker secrets files in `docker/secrets/` and sets ownership/permissions so Grafana/Alertmanager can read them safely.
+…run the bootstrap script once from the repo root. It creates the expected Docker secrets files in `docker/secrets/` and sets ownership/permissions so **Grafana/Alertmanager** can read them safely.
 
-Required env vars:
-- `GRAFANA_ADMIN_USER`
-- `GRAFANA_ADMIN_PASSWORD`
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
+#### Required env vars
 
-Usage (from repo root):
+- **`GRAFANA_ADMIN_USER`**
+- **`GRAFANA_ADMIN_PASSWORD`**
+- **`TELEGRAM_BOT_TOKEN`**
+- **`TELEGRAM_CHAT_ID`**
+
+#### Usage (from repo root)
+
 ```bash
 export GRAFANA_ADMIN_USER=admin
 export GRAFANA_ADMIN_PASSWORD='supersecret'
@@ -299,7 +443,8 @@ export TELEGRAM_CHAT_ID='...'
 ./.bootstrap-local.sh
 ```
 
-> For the overlay mechanics and the exact secret file wiring, see [`docker/README.md`](docker/README.md).
+> [!TIP]
+> For the overlay mechanics and the exact secret file wiring, see [`docker/README.md#compose-layout`](docker/README.md#compose-layout)
 
 ---
 
@@ -311,9 +456,10 @@ The workflow runs on pushes, PRs, and tags; it enforces formatting, linting, tes
 
 See: [`.github/workflows/cicd.yaml`](.github/workflows/cicd.yaml)
 
-### Local CI parity: `.ci-local.sh`
+> [!NOTE]
+> GitHub Actions only discovers workflows from **`.github/workflows/`**. If you’re viewing this project from an archive that strips dot-directories, double-check the repo still contains `.github/workflows` when pushed to GitHub.
 
-Usage (from repo root):
+### Local CI parity: `.ci-local.sh`
 
 ```bash
 ./.ci-local.sh               # run all: go + java + python
@@ -323,7 +469,7 @@ Usage (from repo root):
 ./.ci-local.sh doctor all    # preflight checks (recommended)
 ```
 
-Tool pins live in: `.ci-tool-versions.sh`
+Tool pins live in: [`.ci-tool-versions.sh`](.ci-tool-versions.sh) — the **single source of truth** consumed by **`.ci-local.sh`** and **`.github/workflows/cicd.yaml`**.
 
 ---
 
@@ -331,45 +477,71 @@ Tool pins live in: `.ci-tool-versions.sh`
 
 | Path | Purpose |
 |---|---|
-| [`docker/`](docker/README.md) | Compose stacks (apps-only + full observability), configs for Alloy/Prometheus/Loki/Tempo/Grafana/Alertmanager, secret overlays, staging pulls |
+| [`docker/`](docker/README.md) | Compose stacks (apps-only + full observability), configs for **Alloy/Prometheus/Loki/Tempo/Grafana/Alertmanager**, secret overlays, staging pulls |
 | [`golang-gin/`](golang-gin/README.md) | Go + Gin service |
 | [`java-springboot/`](java-springboot/README.md) | Spring Boot service |
 | [`python-django/`](python-django/README.md) | Django service |
 | [`.github/workflows/cicd.yaml`](.github/workflows/cicd.yaml) | CI/CD workflow |
 | [`.bootstrap-local.sh`](.bootstrap-local.sh) | Local bootstrap for secrets + permissions |
 | [`.ci-local.sh`](.ci-local.sh) | Local CI runner |
-| [`.ci-tool-versions.sh`](.ci-tool-versions.sh) | Tool/version pins used by local CI + CI |
+| [`.ci-tool-versions.sh`](.ci-tool-versions.sh) | Tool/version pins (**single source of truth**) consumed by **`.ci-local.sh`** and **`.github/workflows/cicd.yaml`** |
 | [`.gitignore`](.gitignore) | Secret hygiene + build artifact ignores |
 
 ---
 
-## Languages, frameworks, and stack versions
+## Versions
 
 ### App runtimes/frameworks
-- **Go:** `1.25.6`
-- **Gin:** `v1.11.0`
-- **Java:** `25.0.2`
-- **Spring Boot:** `4.0.2`
-- **Python:** `3.12`
-- **Django:** `6.0.2`
+
+| Runtime / framework | Version |
+|---|---|
+| **Go** | `1.25.6` |
+| **Gin** | `v1.11.0` |
+| **Java** | `25` |
+| **Spring Boot** | `4.0.2` |
+| **Python** | `3.12` |
+| **Django** | `6.0.2` |
 
 ### Observability images (from `docker/compose._observability.yaml`)
-- **Alloy:** `grafana/alloy:v1.12.2`
-- **Prometheus:** `prom/prometheus:v3.9.1`
-- **Alertmanager:** `prom/alertmanager:v0.31.0`
-- **Loki:** `grafana/loki:3.6.4`
-- **Tempo:** `grafana/tempo:2.10.0`
-- **Grafana:** `grafana/grafana:12.3.2`
+
+| Component | Image |
+|---|---|
+| **Alloy** | `grafana/alloy:v1.12.2` |
+| **Prometheus** | `prom/prometheus:v3.9.1` |
+| **Alertmanager** | `prom/alertmanager:v0.31.0` |
+| **Loki** | `grafana/loki:3.6.4` |
+| **Tempo** | `grafana/tempo:2.10.0` |
+| **Grafana** | `grafana/grafana:12.3.2` |
 
 ---
 
-## `.gitignore` policy
+## Troubleshooting
 
-This repo is designed to be safe-by-default for local development:
-- real `.env` files and secret outputs should **never** be committed
-- build artifacts and generated security reports should remain out of git
+### Ports are already allocated
 
-See [`.gitignore`](.gitignore) `for the exact ignore/allowlist rules.`
+**Symptom:** Compose fails with `ports are already allocated`.
+
+**Fix:** stop the conflicting process, or change the host port mapping(s) in the relevant Compose file.
+
+### Grafana is up but I don’t see data
+
+1. Generate traffic (see [`#traffic-generator`](#traffic-generator)).
+2. Confirm Prometheus is scraping: `http://127.0.0.1:9090/targets`
+3. In Grafana, verify datasources are reachable (you can also inspect container logs).
+
+### Healthchecks keep failing / services restart
+
+Common causes:
+
+- insufficient CPU/RAM assigned to Docker Desktop
+- old Docker / Compose versions
+- stale volumes from a previous run (try a **full reset** via `down -v`)
+
+### Secrets-enabled stack won’t start
+
+Run the bootstrap step and ensure the required env vars are set. 
+
+See: [`#secrets-bootstrap`](#secrets-bootstrap)
 
 ---
 

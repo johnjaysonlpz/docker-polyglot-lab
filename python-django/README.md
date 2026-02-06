@@ -6,11 +6,88 @@ It runs behind **Gunicorn 25.0.1** and exports the standard repo signals:
 
 **Signals (repo stack):** **traces → Alloy → Tempo**, **metrics → Prometheus**, **logs → Loki**.
 
+> [!TIP]
+> For the repo overview and contracts, see [`../README.md`](../README.md). For Compose stacks and operator commands, see [`../docker/README.md`](../docker/README.md).
+
 ---
+
+## Contents
+
+- [TL;DR](#tldr)
+- [What this service provides](#what-this-service-provides)
+- [HTTP API](#http-api)
+- [Configuration](#configuration)
+- [Request processing pipeline](#request-processing-pipeline)
+- [Payload validation & limits](#payload-validation-limits)
+- [Observability](#observability)
+- [Error utilities](#error-utilities)
+- [Operational knobs](#operational-knobs)
+- [Testing & linting](#testing-linting)
+- [Local CI](#local-ci)
+- [Container image details](#container-image-details)
+- [Implementation map (where to look)](#implementation-map-where-to-look)
+- [Interactions with other modules](#interactions-with-other-modules)
 
 ## TL;DR
 
-### Run locally (without Docker)
+> [!TIP]
+> **Recommended path:** run the full stack (apps + observability) via the canonical Compose entrypoints in [`../docker/README.md#tldr—canonical-entrypoints`](../docker/README.md#tldr--canonical-entrypoints), then use Grafana Explore to validate metrics/logs/traces.
+
+### Service contract (quick reference)
+
+| Contract | Value |
+|---|---|
+| **Internal listen** | `0.0.0.0:8080` |
+| **Compose host port** | `127.0.0.1:8083` |
+| **Endpoints** | `/` · `/info` · `/health` · `/ready` · `/metrics` |
+| **Request ID** | `X-Request-ID` (accepted if valid, always returned) |
+| **Env templates** | `.env.development` · `.env.integration` · `.env.staging` |
+
+### Running options (pick one)
+
+<details>
+<summary><strong>Run via the repo Compose stacks (recommended)</strong></summary>
+
+Use the canonical stack entrypoints from [`../docker/README.md#tldr—canonical-entrypoints`](../docker/README.md#tldr--canonical-entrypoints).
+
+**Option A (recommended): run from the repo root** (keeps paths consistent):
+
+```bash
+docker compose --project-directory docker \
+  -f docker/compose.development.yaml \
+  up --build
+
+# or full stack with observability
+docker compose --project-directory docker \
+  -f docker/compose.integration.nosecrets.yaml \
+  up --build
+```
+
+**Option B: run from the `/docker` directory** (works because includes are relative):
+
+```bash
+cd docker
+
+docker compose \
+  -f compose.development.yaml \
+  up --build
+
+# or full stack with observability
+docker compose \
+  -f compose.integration.nosecrets.yaml \
+  up --build
+```
+
+Compose wiring for this service (from `docker/compose._apps.yaml`):
+- service name: **`python-django-app`**
+- host port: **`127.0.0.1:8083`**
+- healthcheck: `GET http://127.0.0.1:8080/ready`
+- env file selection: `../python-django/.env.${APP_ENV:-integration}`
+
+</details>
+
+<details>
+<summary><strong>Run locally (without Docker)</strong></summary>
 
 Requires:
 - **Python 3.12**
@@ -25,8 +102,13 @@ python -m pip install --upgrade pip
 python -m pip install --require-hashes -r requirements.lock
 python -m pip install -r requirements.test.txt
 
+set -a; source .env.development; set +a
+
 python app/manage.py runserver 0.0.0.0:8080
 ```
+
+> [!NOTE]
+> `runserver` is a development server. For production-parity behavior (Gunicorn, graceful shutdown, OTel instrumentation wrapper, and the same startup flags used in Compose), run the container or use `entrypoint.sh`.
 
 Smoke test:
 ```bash
@@ -36,7 +118,10 @@ curl -i http://127.0.0.1:8080/info
 curl -i http://127.0.0.1:8080/metrics
 ```
 
-### Running with Docker
+</details>
+
+<details>
+<summary><strong>Build + run container image (Docker)</strong></summary>
 
 #### Build the image
 The Dockerfile builds a locked venv, optionally runs tests in a separate stage, and injects build metadata:
@@ -68,20 +153,7 @@ docker ps
 docker logs -f python-django-app
 ```
 
-### Run via the repo Compose stacks
-From `docker/` in the repo root:
-
-```bash
-docker compose -f compose.development.yaml up --build
-# or full stack with observability
-docker compose -f compose.integration.nosecrets.yaml up --build
-```
-
-Compose wiring for this service (from `docker/compose._apps.yaml`):
-- service name: **`python-django-app`**
-- host port: **`127.0.0.1:8083`**
-- healthcheck: `GET http://127.0.0.1:8080/ready`
-- env file selection: `../python-django/.env.${APP_ENV:-integration}`
+</details>
 
 ---
 
@@ -115,7 +187,9 @@ Compose wiring for this service (from `docker/compose._apps.yaml`):
 | GET | `/info` | Build/service metadata (JSON) |
 | GET | `/metrics` | Prometheus scrape endpoint |
 
-#### `/info` response
+<details>
+<summary><strong>Sample: `/info` response</strong></summary>
+
 ```json
 {
   "service": "python-django-app",
@@ -124,7 +198,11 @@ Compose wiring for this service (from `docker/compose._apps.yaml`):
 }
 ```
 
-#### `/info` logs
+</details>
+
+<details>
+<summary><strong>Sample: `/info` log event (JSON)</strong></summary>
+
 ```json
 {
   "time": "2026-02-03T07:28:22.661249Z",
@@ -147,8 +225,13 @@ Compose wiring for this service (from `docker/compose._apps.yaml`):
 }
 ```
 
+</details>
+
 ### Error response format
 All errors are emitted as:
+<details>
+<summary><strong>Sample: error response JSON</strong></summary>
+
 ```json
 {
   "error": "…",
@@ -156,6 +239,8 @@ All errors are emitted as:
   "request_id": "…"
 }
 ```
+
+</details>
 
 Common codes (explicitly mapped):
 - **400** → `bad_request`
@@ -193,9 +278,12 @@ These env vars intentionally mirror the other services where it makes sense (**H
 > Difference vs Go/Java: the middleware supports “disable limit when <= 0”, but `settings.py` validates `MAX_BODY_BYTES` as **>= 1**, so disabling requires a code change (intentionally strict).
 
 Build metadata variables are available as runtime defaults (and are commonly set at image build time):
-- `SERVICE_NAME` (default: `python-django-app`)
-- `VERSION` (default: `0.0.0-dev`)
-- `BUILD_TIME` (default: `unknown`)
+
+| Variable | Default | Where it shows up |
+|---|---:|---|
+| `SERVICE_NAME` | `python-django-app` | `/info` JSON, logs, (and labels where applicable) |
+| `VERSION` | `0.0.0-dev` | `/info` JSON, logs, `build_info` metric label |
+| `BUILD_TIME` | `unknown` | `/info` JSON, logs, `build_info` metric label |
 
 ### Gunicorn / runtime env vars (entrypoint)
 
@@ -216,6 +304,12 @@ Build metadata variables are available as runtime defaults (and are commonly set
 | `OTEL_PYTHON_ENABLED` | `true` | if true and `opentelemetry-instrument` exists, wraps Gunicorn with OTel instrumentation |
 
 ### OpenTelemetry env vars (from `.env.*`)
+
+> [!NOTE]
+> This repo uses a **hybrid model**: Prometheus scrapes `/metrics`, while traces are exported via OTLP to Alloy.
+
+<details>
+<summary><strong>Click to expand OTel env var examples (development vs integration/staging)</strong></summary>
 
 The repo env files configure tracing consistently with other modules:
 
@@ -243,6 +337,8 @@ This module includes:
 
 ---
 
+</details>
+
 ## Request processing pipeline
 
 ### URL routing
@@ -250,7 +346,9 @@ This module includes:
 - routes: `/`, `/info`, `/health`, `/ready`, `/metrics`
 - error handlers: `handler400/403/404/500` mapped to `infra.errors.*`
 
-### Middleware order (outer → inner)
+<details>
+<summary><strong>Middleware order (outer → inner)</strong></summary>
+
 Configured in `django_app/settings.py`:
 
 1. **`infra.middleware.RequestIdMiddleware`**
@@ -281,6 +379,10 @@ Configured in `django_app/settings.py`:
 
 ---
 
+</details>
+
+---
+
 ## Payload validation & limits
 
 ### `MAX_BODY_BYTES` (default **1 MiB**)
@@ -304,7 +406,21 @@ Enforced in **three places**:
 
 ## Observability
 
-### Metrics (Prometheus)
+**Signal flow (repo stack):**
+
+- **Metrics:** Prometheus scrapes `GET /metrics`
+- **Traces:** OTLP → **Alloy** → **Tempo**
+- **Logs:** container stdout/stderr → Docker → **Alloy** → **Loki**
+
+| Signal | Boundary | Collected by |
+|---|---|---|
+| **Metrics** | `/metrics` | Prometheus scrape model |
+| **Traces** | OTLP (`4317`/`4318`) | Alloy → Tempo |
+| **Logs** | JSON to stdout/stderr | Alloy → Loki |
+
+<details>
+<summary><strong>Metrics (Prometheus)</strong></summary>
+
 `/metrics` uses **prometheus-client 0.24.1** with a module-scoped `CollectorRegistry` and collectors:
 - process
 - platform
@@ -325,7 +441,11 @@ Path labeling (low cardinality):
 Access log suppression:
 - successful `/health`, `/ready`, `/metrics` are **not logged** (but are still counted in metrics).
 
-### Tracing (OpenTelemetry)
+</details>
+
+<details>
+<summary><strong>Tracing (OpenTelemetry)</strong></summary>
+
 - Docker entrypoint wraps Gunicorn with `opentelemetry-instrument` when `OTEL_PYTHON_ENABLED=true`.
 - The request middleware attaches `request_id` to the active span attribute `request_id` (best-effort).
 
@@ -335,7 +455,11 @@ Repo env files typically set:
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://alloy:4318/v1/traces`
 - `OTEL_TRACES_SAMPLER=always_on`
 
-### Logs
+</details>
+
+<details>
+<summary><strong>Logs</strong></summary>
+
 Structured logs are configured in `infra/logging_config.py` and used by both Django and Gunicorn:
 
 - canonical JSON schema with stable field ordering
@@ -346,6 +470,10 @@ Structured logs are configured in `infra/logging_config.py` and used by both Dja
   - `trace_id`, `span_id` when a valid span exists
 
 Gunicorn access logs are disabled (`accesslog = os.devnull`) because the app emits its own access logs.
+
+---
+
+</details>
 
 ---
 
@@ -396,6 +524,11 @@ mypy app
 
 This repo provides a **local parity runner** at the repo root: `./.ci-local.sh` (mirrors `.github/workflows/cicd.yaml`).
 
+> [!NOTE]
+> **Tool versions are pinned in `./.ci-tool-versions.sh`**, which is the **single source of truth** for:
+> - `./.ci-local.sh`
+> - `.github/workflows/cicd.yaml`
+
 ### Prerequisites
 - bash
 - git (for `git diff --exit-code` checks)
@@ -430,6 +563,7 @@ What it runs for this module (in order):
   - **push/tags**: `mypy app` is **blocking**
 - tests + coverage:
   - `pytest --cov --cov-report=xml --cov-fail-under=100` (writes `coverage.xml`)
+  - coverage gate: **100% statements** via `--cov-fail-under=100` (fails if < 100%)
 - security (push/tags only):
   - `pip-audit -r requirements.lock` (+ JSON report `pip-audit.json`)
 
@@ -471,16 +605,21 @@ CI_LOCAL_CLEAN_VENV=0 ./.ci-local.sh python   # keep .venv-ci for debugging
 
 ## Implementation map (where to look)
 
-- `pyproject.toml` — Ruff configuration (line length, lint rules)
-- `app/django_app/settings.py` — env parsing, middleware wiring, payload limits
-- `app/django_app/urls.py` — routing + error handler wiring
-- `app/infra/views.py` — endpoints (`/`, `/info`, `/health`, `/ready`, `/metrics`)
-- `app/infra/middleware.py` — request id, client IP, access logs, metrics, payload fast-fail
-- `app/infra/errors.py` — stable JSON errors
-- `app/infra/metrics.py` — Prometheus registry + meters + buckets
-- `app/infra/logging_config.py` — JSON log schema + correlation filters
-- `entrypoint.sh` — Gunicorn startup + optional OTel instrumentation
-- `gunicorn.conf.py` — Gunicorn log config (app JSON logs; access log suppressed)
+| Change you want | Where to look |
+|---|---|
+| **`pyproject.toml`** | Ruff configuration (line length, lint rules) |
+| **`app/django_app/settings.py`** | env parsing, middleware wiring, payload limits |
+| **`app/django_app/urls.py`** | routing + error handler wiring |
+| **`app/infra/views.py`** | endpoints (`/`, `/info`, `/health`, `/ready`, `/metrics`) |
+| **`app/infra/middleware.py`** | request id, client IP, access logs, metrics, payload fast-fail |
+| **`app/infra/errors.py`** | stable JSON errors |
+| **`app/infra/metrics.py`** | Prometheus registry + meters + buckets |
+| **`app/infra/logging_config.py`** | JSON log schema + correlation filters |
+| **`entrypoint.sh`** | Gunicorn startup + optional OTel instrumentation |
+| **`gunicorn.conf.py`** | Gunicorn log config (app JSON logs; access log suppressed) |
+
+> [!TIP]
+> Prefer starting with the **request pipeline** (middleware/filter chain), then jump to metrics/logging/tracing wiring.
 
 ---
 
