@@ -120,9 +120,9 @@ cd java-springboot
 docker build \
   --build-arg RUN_TESTS=true \
   --build-arg SERVICE_NAME=java-springboot-app \
-  --build-arg VERSION=2.0.0 \
+  --build-arg VERSION="${VERSION:-integration}" \
   --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -t java-springboot-app:2.0.0 .
+  -t java-springboot-app:${VERSION:-integration} .
 ```
 
 #### Run (using `.env.integration`)
@@ -132,7 +132,7 @@ docker run -d \
   --restart unless-stopped \
   --env-file .env.integration \
   -p 8082:8080 \
-  java-springboot-app:2.0.0
+  java-springboot-app:${VERSION:-integration}
 ```
 
 #### Check status
@@ -182,7 +182,7 @@ docker logs -f java-springboot-app
 ```json
 {
   "service": "java-springboot-app",
-  "version": "2.0.0",
+  "version": "<version>",
   "build_time": "2026-02-03T07:22:30Z"
 }
 ```
@@ -198,7 +198,7 @@ docker logs -f java-springboot-app
   "level": "INFO",
   "msg": "http_request",
   "service": "java-springboot-app",
-  "version": "2.0.0",
+  "version": "<version>",
   "build_time": "2026-02-03T07:22:30Z",
   "request_id": "d7c19038-da50-4112-b93f-085b8eff987d",
   "trace_id": "31d5a46c4d5481247b84c616919e372c",

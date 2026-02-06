@@ -5,7 +5,7 @@
 [![Release](https://img.shields.io/github/v/release/johnjaysonlpz/docker-polyglot-lab)](https://github.com/johnjaysonlpz/docker-polyglot-lab/releases)
 [![Last Commit](https://img.shields.io/github/last-commit/johnjaysonlpz/docker-polyglot-lab)](https://github.com/johnjaysonlpz/docker-polyglot-lab/commits)
 
-![Go](https://img.shields.io/badge/Go-1.25.6-informational)
+![Go](https://img.shields.io/badge/Go-1.25.7-informational)
 ![Gin](https://img.shields.io/badge/Gin-v1.11.0-informational)
 ![Java](https://img.shields.io/badge/Java-25-informational)
 ![Spring%20Boot](https://img.shields.io/badge/Spring%20Boot-4.0.2-informational)
@@ -140,7 +140,7 @@ Because Compose is invoked with `--project-directory docker`, the natural place 
 ```bash
 cat > docker/.env <<'EOF'
 APP_ENV=staging
-APP_VERSION=2.0.0
+APP_VERSION=2.0.1
 REGISTRY=docker.io/johnjaysonlopez
 EOF
 ```
@@ -495,7 +495,7 @@ Tool pins live in: [`.ci-tool-versions.sh`](.ci-tool-versions.sh) — the **sing
 
 | Runtime / framework | Version |
 |---|---|
-| **Go** | `1.25.6` |
+| **Go** | `1.25.7` |
 | **Gin** | `v1.11.0` |
 | **Java** | `25` |
 | **Spring Boot** | `4.0.2` |

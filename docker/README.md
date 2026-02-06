@@ -66,7 +66,7 @@ cat > docker/.env <<'EOF'
 APP_ENV=integration
 
 # Used for staging pulls (and surfaced in /info where applicable)
-APP_VERSION=2.0.0
+APP_VERSION=${VERSION:-integration}
 
 # Required only for staging pulls (ignored for local builds)
 REGISTRY=docker.io/johnjaysonlopez

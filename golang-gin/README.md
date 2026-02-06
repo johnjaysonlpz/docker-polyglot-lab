@@ -1,6 +1,6 @@
 # /golang-gin — **Go + Gin** HTTP service (**metrics + traces + structured logs**)
 
-A small, production-shaped HTTP service written in **Go 1.25.6** using **Gin 1.11.0**, designed to run standalone or as part of the repo’s Docker Compose lab stack.
+A small, production-shaped HTTP service written in **Go 1.25.7** using **Gin 1.11.0**, designed to run standalone or as part of the repo’s Docker Compose lab stack.
 
 **Signals (repo stack):** **traces → Alloy → Tempo**, **metrics → Prometheus**, **logs → Loki**.
 
@@ -87,7 +87,7 @@ Compose wiring for this service:
 <details>
 <summary><strong>Run locally (without Docker)</strong></summary>
 
-Requires **Go 1.25.6**.
+Requires **Go 1.25.7**.
 
 ```bash
 cd golang-gin
@@ -117,9 +117,9 @@ cd golang-gin
 docker build \
   --build-arg RUN_TESTS=true \
   --build-arg SERVICE_NAME=golang-gin-app \
-  --build-arg VERSION=2.0.0 \
+  --build-arg VERSION="${VERSION:-integration}" \
   --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -t golang-gin-app:2.0.0 .
+  -t golang-gin-app:${VERSION:-integration} .
 ```
 
 #### Run (using `.env.integration`)
@@ -129,7 +129,7 @@ docker run -d \
   --restart unless-stopped \
   --env-file .env.integration \
   -p 8081:8080 \
-  golang-gin-app:2.0.0
+  golang-gin-app:${VERSION:-integration}
 ```
 
 #### Check status
@@ -177,7 +177,7 @@ docker logs -f golang-gin-app
 ```json
 {
   "service": "golang-gin-app",
-  "version": "2.0.0",
+  "version": "<version>",
   "build_time": "2026-02-03T07:22:30Z"
 }
 ```
@@ -193,7 +193,7 @@ docker logs -f golang-gin-app
   "level": "INFO",
   "msg": "http_request",
   "service": "golang-gin-app",
-  "version": "2.0.0",
+  "version": "<version>",
   "build_time": "2026-02-03T07:22:30Z",
   "request_id": "b7ca7802-9ac5-4ec2-af06-2dde73a31ed1",
   "trace_id": "ec08a7b15e8612cfb600897ac85d2cac",
@@ -450,7 +450,7 @@ This repo provides a **local parity runner** at the repo root: `./.ci-local.sh` 
 ### Prerequisites
 - bash
 - git (for `git diff --exit-code` checks)
-- **Go 1.25.6**
+- **Go 1.25.7**
 - `python3.12` (used by the CI script to enforce coverage thresholds)
 - `gcc` (required for the Go race detector)
 - Network access (to `go install` tools the first time)
@@ -494,7 +494,7 @@ CI_EVENT_NAME=pull_request ./.ci-local.sh go
 ### Build arguments
 | Arg | Default | Purpose |
 |---|---:|---|
-| `GO_VERSION` | `1.25.6` | Go toolchain version for the builder stage. |
+| `GO_VERSION` | `1.25.7` | Go toolchain version for the builder stage. |
 | `ALPINE_VERSION` | `3.23.3` | Alpine version for the builder/runtime base images. |
 | `BUILDPLATFORM` | (auto; empty if not provided by BuildKit) | The platform doing the build (the builder machine), e.g. `linux/amd64`. Used to decide whether it’s safe to run tests with `-race` (only when build == target). |
 | `TARGETPLATFORM` | (auto; empty if not provided by BuildKit) | The **intended output image platform**, e.g. `linux/arm64`. Used to compare against `BUILDPLATFORM` to gate tests. |
