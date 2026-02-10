@@ -1,10 +1,12 @@
-name: CI/CD
+name: CI
 
 on:
   push:
     branches: [ main, master ]
     tags: [ "v*" ]
   pull_request:
+  schedule:
+    - cron: "00 12 * * 1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,6 +15,9 @@ concurrency:
 permissions:
   contents: read
   pull-requests: read
+
+env:
+  CI_MAINTAINERS: "johnjaysonlpz otheruser"
 
 jobs:
   policy:
@@ -25,10 +30,20 @@ jobs:
           fetch-depth: 0
 
       - name: Block PRs that modify CI control files
-        if: github.event_name == 'pull_request' && github.actor != 'johnjaysonlpz'
+        if: ${{ github.event_name == 'pull_request' }}
         shell: bash
         run: |
           set -Eeuo pipefail
+
+          actor="${{ github.actor }}"
+          maintainers="${CI_MAINTAINERS:-}"
+
+          maintainers="$(echo "$maintainers" | tr '\n\t' '  ' | xargs)"
+
+          if echo " $maintainers " | grep -Fq " $actor "; then
+            echo "Maintainer bypass: $actor"
+            exit 0
+          fi
 
           base="${{ github.event.pull_request.base.sha }}"
           head="${{ github.event.pull_request.head.sha }}"
@@ -36,7 +51,7 @@ jobs:
           echo "Comparing $base...$head"
           changed="$(git diff --name-only "$base...$head")"
 
-          protected_regex='^(\.ci-tool-versions\.sh|\.ci-local\.sh|\.github/workflows/.*\.ya?ml)$'
+          protected_regex='^(\.ci-tool-versions\.sh|\.ci-local\.sh|\.github/workflows/.*\.ya?ml|\.github/actions/.*\.ya?ml)$'
 
           if echo "$changed" | grep -E "$protected_regex" >/dev/null; then
             echo "ERROR: This PR modifies protected CI control files:"
@@ -48,30 +63,94 @@ jobs:
 
           echo "OK: no protected CI control files modified."
 
+  trivy_repo:
+    name: Security - Trivy (repo) + SARIF
+    runs-on: ubuntu-latest
+    needs: [ policy ]
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      TRIVY_VERSION: ""
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6.0.0
+
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
+
+      - name: Security - Trivy scan (fs) (table, gate HIGH/CRITICAL)
+        id: trivy_repo_table
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          output: trivy-repo.txt
+          exit-code: "1"
+          skip-dirs: .git,.cache
+
+      - name: Security - Trivy scan (fs) -> SARIF (for Code Scanning)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          skip-setup-trivy: true
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-repo.sarif
+          exit-code: "0"
+          skip-dirs: .git,.cache
+
+      - name: Upload - SARIF to GitHub Code Scanning (repo)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-repo.sarif
+          category: trivy-repo
+
+      - name: Artifact - upload Trivy repo report (table)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-repo
+          path: trivy-repo.txt
+          if-no-files-found: warn
+
+      - name: Fail if Trivy repo scan found HIGH/CRITICAL
+        if: steps.trivy_repo_table.outcome == 'failure'
+        shell: bash
+        run: exit 1
+
   go:
     name: Go / Gin - quality, tests, security
     runs-on: ubuntu-latest
     needs: [ policy ]
+    if: github.event_name != 'schedule'
     defaults:
       run:
         working-directory: golang-gin
-
     env:
       GOIMPORTS_VERSION: ""
       GOVULNCHECK_VERSION: ""
       GOLANGCI_LINT_VERSION: ""
       GO_MODULE: ""
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v6.0.0
 
-      - name: Load tool versions
-        shell: bash
-        working-directory: ${{ github.workspace }}
-        run: |
-          test -f .ci-tool-versions.sh
-          cat .ci-tool-versions.sh >> "$GITHUB_ENV"
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
 
       - name: Security - dependency review (PR only)
         if: github.event_name == 'pull_request'
@@ -126,8 +205,7 @@ jobs:
           args: --config=.golangci.yaml ./...
 
       - name: Quality - static analysis (go vet)
-        run: |
-          go vet ./...
+        run: go vet ./...
 
       - name: Setup - system deps for race detector (CGO)
         run: |
@@ -180,27 +258,22 @@ jobs:
     name: Java / Spring Boot - Spotless, SpotBugs, tests, JaCoCo, security
     runs-on: ubuntu-latest
     needs: [ policy ]
+    if: github.event_name != 'schedule'
     defaults:
       run:
         working-directory: java-springboot
-
     env:
       DEPENDENCY_CHECK_MAVEN_VERSION: ""
       DEPENDENCY_CHECK_FAIL_CVSS: ""
       MAVEN_OPTS: "--sun-misc-unsafe-memory-access=allow"
       ODC_DATA_DIR: "${{ github.workspace }}/.cache/dependency-check"
       ODC_CACHE_EPOCH: "unset"
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v6.0.0
 
-      - name: Load tool versions
-        shell: bash
-        working-directory: ${{ github.workspace }}
-        run: |
-          test -f .ci-tool-versions.sh
-          cat .ci-tool-versions.sh >> "$GITHUB_ENV"
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
 
       - name: Security - dependency review (PR only)
         if: github.event_name == 'pull_request'
@@ -264,25 +337,20 @@ jobs:
     name: Python / Django - quality, tests, coverage, security
     runs-on: ubuntu-latest
     needs: [ policy ]
+    if: github.event_name != 'schedule'
     defaults:
       run:
         working-directory: python-django
-
     env:
       PIP_AUDIT_VERSION: ""
       PIP_TOOLS_VERSION: ""
       PIP_MAX_VERSION: ""
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v6.0.0
 
-      - name: Load tool versions
-        shell: bash
-        working-directory: ${{ github.workspace }}
-        run: |
-          test -f .ci-tool-versions.sh
-          cat .ci-tool-versions.sh >> "$GITHUB_ENV"
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
 
       - name: Security - dependency review (PR only)
         if: github.event_name == 'pull_request'
@@ -310,7 +378,7 @@ jobs:
       - name: Install - runtime + test dependencies (locked)
         run: |
           . .venv-ci/bin/activate
-          python -m pip install --upgrade pip
+          python -m pip install -U "pip<${PIP_MAX_VERSION}"
           python -m pip install --require-hashes -r requirements.lock
           python -m pip install -r requirements.test.txt
 
@@ -373,16 +441,16 @@ jobs:
           path: python-django/pip-audit.json
           if-no-files-found: warn
 
-  docker:
-    name: Docker - build (cache + push on tags)
+  docker_weekly:
+    name: Docker - build + Trivy scan (weekly)
     runs-on: ubuntu-latest
-    needs: [ policy, go, java, python ]
+    needs: [ policy ]
+    if: github.event_name == 'schedule'
     permissions:
       contents: read
-      id-token: write
+      security-events: write
     env:
-      REGISTRY: docker.io
-      DOCKERHUB_NAMESPACE: johnjaysonlopez
+      TRIVY_VERSION: ""
     strategy:
       fail-fast: false
       matrix:
@@ -393,24 +461,123 @@ jobs:
             context: ./java-springboot
           - image: python-django-app
             context: ./python-django
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v6.0.0
+
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
+
+      - name: Setup - Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build - image (local for Trivy scan)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          load: true
+          tags: local/${{ matrix.image }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            RUN_TESTS=false
+            SERVICE_NAME=${{ matrix.image }}
+            VERSION=weekly
+            BUILD_TIME=${{ github.run_id }}
+            OCI_IMAGE_SOURCE=https://github.com/${{ github.repository }}
+            OCI_IMAGE_REVISION=${{ github.sha }}
+
+      - name: Security - Trivy scan (image) (table, gate HIGH/CRITICAL)
+        id: trivy_img_table_weekly
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          scan-type: image
+          scan-ref: local/${{ matrix.image }}:${{ github.sha }}
+          scanners: vuln,misconfig,secret
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          output: trivy-image-${{ matrix.image }}.txt
+          exit-code: "1"
+
+      - name: Trivy - scan image -> SARIF
+        if: always()
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          skip-setup-trivy: true
+          scan-type: image
+          scan-ref: local/${{ matrix.image }}:${{ github.sha }}
+          scanners: vuln,misconfig,secret
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-image-${{ matrix.image }}.sarif
+          exit-code: "0"
+
+      - name: Upload - SARIF to GitHub Code Scanning (image)
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-image-${{ matrix.image }}.sarif
+          category: trivy-image-${{ matrix.image }}
+
+      - name: Artifact - upload Trivy image report (table)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-image-${{ matrix.image }}
+          path: trivy-image-${{ matrix.image }}.txt
+          if-no-files-found: warn
+
+      - name: Fail if Trivy image scan found HIGH/CRITICAL
+        if: steps.trivy_img_table_weekly.outcome == 'failure'
+        shell: bash
+        run: exit 1
+
+  docker_release:
+    name: Docker - build + Trivy scan + push (tags)
+    runs-on: ubuntu-latest
+    needs: [ policy, trivy_repo, go, java, python ]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      security-events: write
+      id-token: write
+    env:
+      REGISTRY: docker.io
+      DOCKERHUB_NAMESPACE: johnjaysonlopez
+      TRIVY_VERSION: ""
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: golang-gin-app
+            context: ./golang-gin
+          - image: java-springboot-app
+            context: ./java-springboot
+          - image: python-django-app
+            context: ./python-django
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6.0.0
+
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
 
       - name: Compute - build metadata (version, build time, test flag)
         id: vars
         shell: bash
         run: |
           echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version_arg=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-            echo "run_tests_arg=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "version_arg=ci" >> "$GITHUB_OUTPUT"
-            echo "run_tests_arg=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "version_arg=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "run_tests_arg=true" >> "$GITHUB_OUTPUT"
 
       - name: Docker - compute tags and OCI labels (metadata-action)
         id: meta
@@ -426,23 +593,23 @@ jobs:
             type=semver,pattern={{major}}
             type=sha,format=short
 
-      - name: Setup - Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Auth - Docker Hub login (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build - image (push/SBOM/provenance on tags)
+      - name: Setup - Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build - image (push temp tag, capture digest)
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
-          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
-          tags: ${{ steps.meta.outputs.tags }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}:ci-${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -453,5 +620,75 @@ jobs:
             BUILD_TIME=${{ steps.vars.outputs.build_time }}
             OCI_IMAGE_SOURCE=https://github.com/${{ github.repository }}
             OCI_IMAGE_REVISION=${{ github.sha }}
-          sbom: ${{ startsWith(github.ref, 'refs/tags/v') }}
-          provenance: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          sbom: true
+          provenance: true
+
+      - name: Security - Trivy scan (image by digest) (table, gate HIGH/CRITICAL)
+        id: trivy_img_table_release
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          scan-type: image
+          scan-ref: ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          scanners: vuln,misconfig,secret
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          output: trivy-image-${{ matrix.image }}.txt
+          exit-code: "1"
+
+      - name: Trivy - scan image -> SARIF
+        if: always()
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          skip-setup-trivy: true
+          scan-type: image
+          scan-ref: ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          scanners: vuln,misconfig,secret
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-image-${{ matrix.image }}.sarif
+          exit-code: "0"
+
+      - name: Upload - SARIF to GitHub Code Scanning (image)
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-image-${{ matrix.image }}.sarif
+          category: trivy-image-${{ matrix.image }}
+
+      - name: Artifact - upload Trivy image report (table)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-image-${{ matrix.image }}
+          path: trivy-image-${{ matrix.image }}.txt
+          if-no-files-found: warn
+
+      - name: Fail if Trivy image scan found HIGH/CRITICAL
+        if: steps.trivy_img_table_release.outcome == 'failure'
+        shell: bash
+        run: exit 1
+
+      - name: Promote - apply release tags to scanned digest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image="${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}"
+          digest="${{ steps.build.outputs.digest }}"
+
+          echo "Promoting ${image}@${digest} to:"
+          echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n'
+
+          while IFS= read -r tag; do
+            tag="$(echo "$tag" | xargs)"
+            [[ -z "$tag" ]] && continue
+            docker buildx imagetools create -t "$tag" "${image}@${digest}"
+          done < <(echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n')

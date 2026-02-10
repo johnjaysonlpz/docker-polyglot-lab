@@ -113,31 +113,61 @@ trap 'on_err "$?" "$LINENO" "${BASH_COMMAND:-}"' ERR
 
 usage() {
   cat <<'TXT'
-Usage:
-  ./.bootstrap-local.sh [--help] [--dry-run]
+bootstrap-local: one-time local setup (secrets, permissions, provisioning)
 
-Options:
-  --help, -h  Show this help.
-  --dry-run   Print actions without making changes.
+USAGE
+  ./.bootstrap-local.sh [--dry-run] [--help]
 
-Required environment variables:
-  GRAFANA_ADMIN_USER
-  GRAFANA_ADMIN_PASSWORD
-  TELEGRAM_BOT_TOKEN
-  TELEGRAM_CHAT_ID
-
-Optional:
-  LOG_LEVEL=quiet|info|debug   (default: info)
-  NVD_API_KEY                  (only needed for OWASP Dependency-Check runs)
-
-Examples (export then run):
+QUICK START
+  # Set required secrets (recommended: do this in a local .env file, then export)
   export GRAFANA_ADMIN_USER=admin
-  export GRAFANA_ADMIN_PASSWORD=secret
-  export TELEGRAM_BOT_TOKEN=...
-  export TELEGRAM_CHAT_ID=...
+  export GRAFANA_ADMIN_PASSWORD='secret'
+  export TELEGRAM_BOT_TOKEN='...'
+  export TELEGRAM_CHAT_ID='...'
+
+  # Run bootstrap
   ./.bootstrap-local.sh
 
-Dry-run + debug:
+  # Preview changes without writing anything
+  LOG_LEVEL=debug ./.bootstrap-local.sh --dry-run
+
+WHAT THIS SCRIPT CHANGES
+  - Creates/locks down docker/secrets (strict perms, refuses symlinks)
+  - Writes Grafana + Alertmanager secret files (0400, service UID/GID)
+  - Ensures Prometheus entrypoint is executable
+  - Ensures Grafana provisioning directories exist with standard perms
+
+OPTIONS
+  --dry-run     Print actions without making changes
+  --help, -h    Show this help
+
+COMMON OPTIONS / ENV
+  Logging:
+    LOG_LEVEL=quiet|info|debug          (default: info)
+
+  Required secrets:
+    GRAFANA_ADMIN_USER
+    GRAFANA_ADMIN_PASSWORD
+    TELEGRAM_BOT_TOKEN
+    TELEGRAM_CHAT_ID
+
+  Optional UID/GID overrides (advanced):
+    GRAFANA_UID=<uid>                   (default: 472)
+    GRAFANA_GID=<gid>                   (default: 0)
+    ALERTMANAGER_UID=<uid>              (default: 65534)
+    ALERTMANAGER_GID=<gid>              (default: 65534)
+
+  Security data (only needed for OWASP Dependency-Check elsewhere):
+    NVD_API_KEY                         (no default)
+
+NOTES
+  - Uses sudo when not run as root.
+  - Refuses to write secrets to symlinks.
+  - Refuses to proceed if anything under docker/secrets is tracked by git.
+
+EXAMPLES
+  ./.bootstrap-local.sh
+  ./.bootstrap-local.sh --dry-run
   LOG_LEVEL=debug ./.bootstrap-local.sh --dry-run
 TXT
 }

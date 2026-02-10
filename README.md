@@ -1,6 +1,6 @@
 # Docker Polyglot Lab
 
-[![CI](https://github.com/johnjaysonlpz/docker-polyglot-lab/actions/workflows/cicd.yaml/badge.svg)](https://github.com/johnjaysonlpz/docker-polyglot-lab/actions/workflows/cicd.yaml)
+[![CI](https://github.com/johnjaysonlpz/docker-polyglot-lab/actions/workflows/ci.yaml/badge.svg)](https://github.com/johnjaysonlpz/docker-polyglot-lab/actions/workflows/ci.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/johnjaysonlpz/docker-polyglot-lab)](https://github.com/johnjaysonlpz/docker-polyglot-lab/releases)
 [![Last Commit](https://img.shields.io/github/last-commit/johnjaysonlpz/docker-polyglot-lab)](https://github.com/johnjaysonlpz/docker-polyglot-lab/commits)
@@ -41,7 +41,7 @@ A **polyglot microservices + observability** lab designed to showcase **modern c
 > **Where to start (fast navigation)**
 > - **Want to run the stack?** Start with [`docker/README.md`](docker/README.md) → **TL;DR — canonical entrypoints**.
 > - **Want to understand the services?** Read the module docs: [`golang-gin/README.md`](golang-gin/README.md), [`java-springboot/README.md`](java-springboot/README.md), [`python-django/README.md`](python-django/README.md).
-> - **Want CI parity and pinned tooling?** Jump to [`#cicd`](#cicd) — `.ci-tool-versions.sh` is the **single source of truth** for local + GitHub CI.
+> - **Want CI parity and pinned tooling?** Jump to [`#ci`](#ci) — `.ci-tool-versions.sh` is the **single source of truth** for local + GitHub CI.
 
 ---
 
@@ -58,7 +58,7 @@ A **polyglot microservices + observability** lab designed to showcase **modern c
 - [Service contract](#service-contract)
 - [Environments](#environments)
 - [Secrets bootstrap](#secrets-bootstrap)
-- [CI/CD](#cicd)
+- [CI](#ci)
 - [Repository structure](#repository-structure)
 - [Versions](#versions)
 - [Troubleshooting](#troubleshooting)
@@ -75,7 +75,7 @@ This project is intentionally built as a **production-minded reference lab** (no
 - **Operator-facing hardening behaviors**: explicit timeouts + graceful shutdown semantics (`SIGTERM`), request/payload limits (**clear `413` behavior**), trusted proxy controls for correct `X-Forwarded-*` handling, and health/readiness checks enforced via **Compose**.
 - **Composable environment “shapes” with strong local parity**: **development** (apps only), **integration** (apps + observability), and **staging** (registry pulls / “build once, deploy many”) using modular Compose building blocks.
 - **Observability you can rely on**: **Prometheus scrape** for metrics, **JSON logs** shipped via **Alloy → Loki**, and **OTLP traces** via **Alloy → Tempo** — correlated in **Grafana**.
-- **High-signal CI/CD with local parity**: `.ci-tool-versions.sh` is the **single source of truth** for pinned toolchains; it’s consumed by both `.ci-local.sh` and `.github/workflows/cicd.yaml` to minimize “works on my machine” drift. Security/dependency checks are part of the normal workflow.
+- **High-signal CI with local parity**: `.ci-tool-versions.sh` is the **single source of truth** for pinned toolchains; it’s consumed by both `.ci-local.sh` and `.github/workflows/ci.yaml` to minimize “works on my machine” drift. Security/dependency checks are part of the normal workflow.
 
 > [!NOTE]
 > For the implementation details of each item (Dockerfiles, Compose hardening, CI gates, and service-specific behaviors), see the per-module README.md docs.
@@ -140,7 +140,7 @@ Because Compose is invoked with `--project-directory docker`, the natural place 
 ```bash
 cat > docker/.env <<'EOF'
 APP_ENV=staging
-APP_VERSION=2.0.1
+APP_VERSION=2.0.2
 REGISTRY=docker.io/johnjaysonlopez
 EOF
 ```
@@ -435,6 +435,8 @@ If you use the **secrets-enabled** Compose entrypoints:
 #### Usage (from repo root)
 
 ```bash
+./.bootstrap-local.sh --help  # or: -h
+
 export GRAFANA_ADMIN_USER=admin
 export GRAFANA_ADMIN_PASSWORD='supersecret'
 export TELEGRAM_BOT_TOKEN='...'
@@ -448,28 +450,37 @@ export TELEGRAM_CHAT_ID='...'
 
 ---
 
-## CI/CD
+## CI
 
 ### GitHub Actions workflow
 
 The workflow runs on pushes, PRs, and tags; it enforces formatting, linting, tests, coverage expectations, and security scanning. It also builds app images and pushes them to a registry on release tags.
 
-See: [`.github/workflows/cicd.yaml`](.github/workflows/cicd.yaml)
+See: [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) (workflow) and [`.github/actions/`](.github/actions/) (shared composite steps).
 
 > [!NOTE]
 > GitHub Actions only discovers workflows from **`.github/workflows/`**. If you’re viewing this project from an archive that strips dot-directories, double-check the repo still contains `.github/workflows` when pushed to GitHub.
 
 ### Local CI parity: `.ci-local.sh`
 
+> [!NOTE]
+> `.ci-local.sh` is a local confidence runner that mirrors CI **intent and major gates**, not the GitHub Actions runtime exactly
+> (e.g., caching, SARIF upload, dependency review, and releases remain workflow-specific).
+> The GitHub workflow (`.github/workflows/ci.yaml`) is the source of truth for action-only behavior.
+
 ```bash
-./.ci-local.sh               # run all: go + java + python
-./.ci-local.sh go            # Go only
-./.ci-local.sh java          # Java only
-./.ci-local.sh python        # Python only
-./.ci-local.sh doctor all    # preflight checks (recommended)
+./.ci-local.sh --help                       # or: -h
+
+./.ci-local.sh                              # default parity flow (push-like): trivy_repo + go + java + python
+CI_EVENT_NAME=pull_request ./.ci-local.sh   # simulate PR: includes policy_check
+CI_EVENT_NAME=schedule ./.ci-local.sh       # simulate weekly: trivy_repo + docker image builds + scans
+
+./.ci-local.sh trivy_repo                   # repo scan only
+./.ci-local.sh docker                       # docker builds + image scans only
+./.ci-local.sh doctor all --summary         # preflight checks (recommended)
 ```
 
-Tool pins live in: [`.ci-tool-versions.sh`](.ci-tool-versions.sh) — the **single source of truth** consumed by **`.ci-local.sh`** and **`.github/workflows/cicd.yaml`**.
+Tool pins live in: [`.ci-tool-versions.sh`](.ci-tool-versions.sh) — the **single source of truth** consumed by **`.ci-local.sh`** and the **GitHub Actions workflow** (via **`.github/actions/load-tool-versions`**).
 
 ---
 
@@ -481,10 +492,11 @@ Tool pins live in: [`.ci-tool-versions.sh`](.ci-tool-versions.sh) — the **sing
 | [`golang-gin/`](golang-gin/README.md) | Go + Gin service |
 | [`java-springboot/`](java-springboot/README.md) | Spring Boot service |
 | [`python-django/`](python-django/README.md) | Django service |
-| [`.github/workflows/cicd.yaml`](.github/workflows/cicd.yaml) | CI/CD workflow |
+| [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) | CI workflow |
+| [`.github/actions/load-tool-versions/`](.github/actions/load-tool-versions/) | Composite action: loads `.ci-tool-versions.sh` into `GITHUB_ENV` |
 | [`.bootstrap-local.sh`](.bootstrap-local.sh) | Local bootstrap for secrets + permissions |
 | [`.ci-local.sh`](.ci-local.sh) | Local CI runner |
-| [`.ci-tool-versions.sh`](.ci-tool-versions.sh) | Tool/version pins (**single source of truth**) consumed by **`.ci-local.sh`** and **`.github/workflows/cicd.yaml`** |
+| [`.ci-tool-versions.sh`](.ci-tool-versions.sh) | Tool/version pins (**single source of truth**) consumed by **`.ci-local.sh`** and **`.github/workflows/ci.yaml`** |
 | [`.gitignore`](.gitignore) | Secret hygiene + build artifact ignores |
 
 ---

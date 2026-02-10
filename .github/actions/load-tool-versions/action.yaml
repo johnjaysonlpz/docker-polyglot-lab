@@ -1,0 +1,12 @@
+name: Load tool versions
+
+description: Export .ci-tool-versions.sh KEY=VALUE lines into GITHUB_ENV
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -Eeuo pipefail
+        test -f .ci-tool-versions.sh
+        grep -E '^[A-Z0-9_]+=.*$' .ci-tool-versions.sh >> "$GITHUB_ENV"
