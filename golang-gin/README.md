@@ -440,12 +440,12 @@ go test ./...
 
 ## Local CI
 
-This repo provides a **local parity runner** at the repo root: `./.ci-local.sh` (mirrors `.github/workflows/cicd.yaml`).
+This repo provides a **local parity runner** at the repo root: `./.ci-local.sh` (mirrors `.github/workflows/ci.yaml`).
 
 > [!NOTE]
 > **Tool versions are pinned in `./.ci-tool-versions.sh`**, which is the **single source of truth** for:
 > - `./.ci-local.sh`
-> - `.github/workflows/cicd.yaml`
+> - `.github/workflows/ci.yaml`
 
 ### Prerequisites
 - bash
