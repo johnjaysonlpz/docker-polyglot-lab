@@ -101,7 +101,6 @@ jobs:
         with:
           version: ${{ env.TRIVY_VERSION }}
           cache-dir: ${{ github.workspace }}/.cache/trivy
-          skip-setup-trivy: true
           scan-type: fs
           scan-ref: .
           scanners: vuln,misconfig,secret
@@ -510,7 +509,6 @@ jobs:
         with:
           version: ${{ env.TRIVY_VERSION }}
           cache-dir: ${{ github.workspace }}/.cache/trivy
-          skip-setup-trivy: true
           scan-type: image
           scan-ref: local/${{ matrix.image }}:${{ github.sha }}
           scanners: vuln,misconfig,secret
@@ -646,7 +644,6 @@ jobs:
         with:
           version: ${{ env.TRIVY_VERSION }}
           cache-dir: ${{ github.workspace }}/.cache/trivy
-          skip-setup-trivy: true
           scan-type: image
           scan-ref: ${{ env.REGISTRY }}/${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}
           scanners: vuln,misconfig,secret
