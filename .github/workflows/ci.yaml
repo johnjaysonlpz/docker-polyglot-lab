@@ -142,8 +142,8 @@ jobs:
     name: Security - Trivy (repo) + SARIF
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [ policy, changes ]
-    if: ${{ github.event_name != 'schedule' && needs.changes.outputs.security == 'true' }}
+    needs: [ policy ]
+    if: ${{ github.event_name != 'schedule' }}
     permissions:
       contents: read
       security-events: write
