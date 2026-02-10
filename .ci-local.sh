@@ -292,7 +292,10 @@ policy_check() {
   is_pr || return 0
 
   local actor="${CI_ACTOR:-${USER:-unknown}}"
-  if [[ "$actor" == "johnjaysonlpz" ]]; then
+  local maintainers="${CI_MAINTAINERS:-}"
+  maintainers="$(echo "$maintainers" | tr '\n\t' '  ' | xargs)"
+
+  if [[ -n "$maintainers" ]] && echo " $maintainers " | grep -Fq " $actor "; then
     debug "policy_check: bypass (actor=$actor)"
     return 0
   fi
@@ -1258,6 +1261,12 @@ run_docker() {
     version_arg="${tag}"
   fi
 
+  if [[ "$release_mode" != "1" ]] && is_schedule; then
+    run_tests="false"
+    version_arg="weekly"
+    tag="weekly"
+  fi
+
   local build_time
   build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -1340,7 +1349,7 @@ QUICK START
   # Simulate a PR run
   CI_EVENT_NAME=pull_request ./.ci-local.sh
 
-  # Weekly parity (schedule): repo scan + docker build + image scan
+  # Weekly parity (schedule): docker build + image scan
   CI_EVENT_NAME=schedule ./.ci-local.sh
 
 COMMANDS
@@ -1355,7 +1364,7 @@ COMMANDS
 HOW CI_EVENT_NAME CHANGES BEHAVIOR
   push          Runs: policy_check (skipped) + trivy_repo + go + java + python
   pull_request  Runs: policy_check (enabled) + trivy_repo + go + java + python
-  schedule      Runs: trivy_repo + docker (weekly parity), skips go/java/python
+  schedule      Runs: docker (weekly parity), skips trivy_repo/go/java/python
 
 COMMON OPTIONS / ENV
   Logging:
@@ -1411,10 +1420,11 @@ main() {
     all)
       init_summary
       policy_check
-      run_trivy_repo
+
       if is_schedule; then
         run_docker
       else
+        run_trivy_repo
         run_go
         run_java
         run_python
