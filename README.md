@@ -476,6 +476,7 @@ See: [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) (workflow) and [`.
 ./.ci-local.sh trivy_repo                   # repo scan only
 ./.ci-local.sh docker                       # docker builds + image scans only
 ./.ci-local.sh doctor all --summary         # preflight checks (recommended)
+```
 
 Tool pins live in: [`.ci-tool-versions.sh`](.ci-tool-versions.sh) — the **single source of truth** consumed by **`.ci-local.sh`** and the **GitHub Actions workflow** (via **`.github/actions/load-tool-versions`**).
 
