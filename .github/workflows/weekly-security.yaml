@@ -1,0 +1,423 @@
+name: Weekly Security
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "00 12 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  trivy_repo:
+    name: Security - Trivy (repo) + SARIF
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      TRIVY_VERSION: ""
+      TRIVY_CACHE_EPOCH: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
+
+      - name: Validate - tool versions loaded
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${TRIVY_VERSION:?TRIVY_VERSION is empty (load-tool-versions failed?)}"
+
+      - name: Compute - Trivy cache epoch (weekly)
+        shell: bash
+        run: echo "TRIVY_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
+
+      - name: Cache - Trivy DB/cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: trivy-${{ runner.os }}-${{ env.TRIVY_VERSION }}-${{ env.TRIVY_CACHE_EPOCH }}
+          restore-keys: |
+            trivy-${{ runner.os }}-${{ env.TRIVY_VERSION }}-
+
+      - name: Security - Trivy scan (fs) (table, gate HIGH/CRITICAL)
+        id: trivy_repo_table
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          output: trivy-repo.txt
+          exit-code: "1"
+          skip-dirs: .git,.cache
+
+      - name: Security - Trivy scan (fs) -> SARIF (for Code Scanning)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-repo.sarif
+          exit-code: "0"
+          skip-dirs: .git,.cache
+
+      - name: Upload - SARIF to GitHub Code Scanning (repo)
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-repo.sarif
+          category: trivy-repo
+
+      - name: Artifact - upload Trivy repo report (table)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: trivy-repo
+          path: trivy-repo.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Gate - fail if Trivy repo scan found HIGH/CRITICAL
+        if: steps.trivy_repo_table.outcome == 'failure'
+        shell: bash
+        run: exit 1
+
+  docker_weekly:
+    name: Docker - build + Trivy scan (weekly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      TRIVY_VERSION: ""
+      TRIVY_CACHE_EPOCH: ""
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: golang-gin-app
+            context: ./golang-gin
+          - image: java-springboot-app
+            context: ./java-springboot
+          - image: python-django-app
+            context: ./python-django
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
+
+      - name: Validate - tool versions loaded
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${TRIVY_VERSION:?TRIVY_VERSION is empty (load-tool-versions failed?)}"
+
+      - name: Compute - Trivy cache epoch (weekly)
+        shell: bash
+        run: echo "TRIVY_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
+
+      - name: Cache - Trivy DB/cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: trivy-${{ runner.os }}-${{ env.TRIVY_VERSION }}-${{ env.TRIVY_CACHE_EPOCH }}
+          restore-keys: |
+            trivy-${{ runner.os }}-${{ env.TRIVY_VERSION }}-
+
+      - name: Setup - Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build - image (local for Trivy scan)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          load: true
+          tags: local/${{ matrix.image }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            RUN_TESTS=false
+            SERVICE_NAME=${{ matrix.image }}
+            VERSION=weekly
+            BUILD_TIME=${{ github.run_id }}
+            OCI_IMAGE_SOURCE=https://github.com/${{ github.repository }}
+            OCI_IMAGE_REVISION=${{ github.sha }}
+
+      - name: Security - Trivy scan (image) (table, gate HIGH/CRITICAL)
+        id: trivy_img_table_weekly
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          scan-type: image
+          scan-ref: local/${{ matrix.image }}:${{ github.sha }}
+          scanners: vuln,misconfig,secret
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          output: trivy-image-${{ matrix.image }}.txt
+          exit-code: "1"
+
+      - name: Trivy - scan image -> SARIF
+        if: always()
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          scan-type: image
+          scan-ref: local/${{ matrix.image }}:${{ github.sha }}
+          scanners: vuln,misconfig,secret
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-image-${{ matrix.image }}.sarif
+          exit-code: "0"
+
+      - name: Upload - SARIF to GitHub Code Scanning (image)
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-image-${{ matrix.image }}.sarif
+          category: trivy-image-${{ matrix.image }}
+
+      - name: Artifact - upload Trivy image report (table)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: trivy-image-${{ matrix.image }}
+          path: trivy-image-${{ matrix.image }}.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Gate - fail if Trivy image scan found HIGH/CRITICAL
+        if: steps.trivy_img_table_weekly.outcome == 'failure'
+        shell: bash
+        run: exit 1
+
+  govulncheck_weekly:
+    name: Security - govulncheck (weekly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: golang-gin
+    env:
+      GOVULNCHECK_VERSION: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
+
+      - name: Validate - tool versions loaded
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${GOVULNCHECK_VERSION:?GOVULNCHECK_VERSION is empty}"
+
+      - name: Setup - Go toolchain
+        id: go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: golang-gin/go.mod
+          cache-dependency-path: golang-gin/go.sum
+          check-latest: false
+
+      - name: Cache - Go tools (govulncheck)
+        id: cache_go_tools
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/bin
+          key: go-tools-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ env.GOVULNCHECK_VERSION }}
+
+      - name: Setup - install govulncheck (cache miss)
+        if: steps.cache_go_tools.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+
+      - name: Setup - add Go tools to PATH
+        shell: bash
+        run: |
+          GOBIN="$(go env GOBIN)"
+          if [[ -z "$GOBIN" ]]; then
+            GOPATH_FIRST="$(go env GOPATH)"
+            GOPATH_FIRST="${GOPATH_FIRST%%:*}"
+            GOBIN="${GOPATH_FIRST}/bin"
+          fi
+          echo "$GOBIN" >> "$GITHUB_PATH"
+          command -v govulncheck
+
+      - name: Security - govulncheck (with tests)
+        shell: bash
+        run: |
+          set -o pipefail
+          govulncheck -test ./... | tee govulncheck-weekly.txt
+
+      - name: Artifact - upload govulncheck report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: go-gin-govulncheck-weekly
+          path: golang-gin/govulncheck-weekly.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+  pip_audit_weekly:
+    name: Security - pip-audit (weekly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: python-django
+    env:
+      PIP_AUDIT_VERSION: ""
+      PIP_MAX_VERSION: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
+
+      - name: Validate - tool versions loaded
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${PIP_AUDIT_VERSION:?PIP_AUDIT_VERSION is empty}"
+          : "${PIP_MAX_VERSION:?PIP_MAX_VERSION is empty}"
+          test -f requirements.lock
+
+      - name: Setup - Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            python-django/requirements.lock
+
+      - name: Setup - venv + install pip-audit
+        shell: bash
+        run: |
+          python -m venv .venv-audit
+          . .venv-audit/bin/activate
+          python -m pip install -U "pip<${PIP_MAX_VERSION}"
+          python -m pip install "pip-audit==${PIP_AUDIT_VERSION}"
+
+      - name: Security - pip-audit (locked deps)
+        shell: bash
+        run: |
+          . .venv-audit/bin/activate
+          pip-audit -r requirements.lock --format=json --output=pip-audit-weekly.json
+          pip-audit -r requirements.lock
+
+      - name: Artifact - upload pip-audit report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: python-django-pip-audit-weekly
+          path: python-django/pip-audit-weekly.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  dependency_check_weekly:
+    name: Security - OWASP Dependency-Check (weekly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: java-springboot
+    env:
+      DEPENDENCY_CHECK_MAVEN_VERSION: ""
+      DEPENDENCY_CHECK_FAIL_CVSS: ""
+      ODC_DATA_DIR: "${{ github.workspace }}/.cache/dependency-check"
+      ODC_CACHE_EPOCH: "unset"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
+
+      - name: Validate - tool versions loaded
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${DEPENDENCY_CHECK_MAVEN_VERSION:?DEPENDENCY_CHECK_MAVEN_VERSION is empty}"
+          : "${DEPENDENCY_CHECK_FAIL_CVSS:?DEPENDENCY_CHECK_FAIL_CVSS is empty}"
+
+      - name: Setup - JDK 25 (Temurin)
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Compute cache epoch (weekly)
+        shell: bash
+        run: echo "ODC_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
+
+      - name: Cache - OWASP Dependency-Check data
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.ODC_DATA_DIR }}
+          key: dependency-check-${{ runner.os }}-${{ env.DEPENDENCY_CHECK_MAVEN_VERSION }}-${{ env.ODC_CACHE_EPOCH }}
+          restore-keys: |
+            dependency-check-${{ runner.os }}-${{ env.DEPENDENCY_CHECK_MAVEN_VERSION }}-
+
+      - name: Security - OWASP Dependency-Check scan
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          mvn -B -ntp org.owasp:dependency-check-maven:${DEPENDENCY_CHECK_MAVEN_VERSION}:check \
+            -DfailBuildOnCVSS=${DEPENDENCY_CHECK_FAIL_CVSS} \
+            -Dformats=HTML,JSON \
+            -DdataDirectory="${ODC_DATA_DIR}" \
+            -DnvdApiKeyEnvironmentVariable=NVD_API_KEY
+
+      - name: Artifact - upload Dependency-Check reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: java-springboot-dependency-check-weekly
+          path: |
+            java-springboot/target/dependency-check-report.html
+            java-springboot/target/dependency-check-report.json
+          if-no-files-found: warn
+          retention-days: 7

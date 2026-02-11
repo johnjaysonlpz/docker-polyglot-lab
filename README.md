@@ -41,7 +41,7 @@ A **polyglot microservices + observability** lab designed to showcase **modern c
 > **Where to start (fast navigation)**
 > - **Want to run the stack?** Start with [`docker/README.md`](docker/README.md) → **TL;DR — canonical entrypoints**.
 > - **Want to understand the services?** Read the module docs: [`golang-gin/README.md`](golang-gin/README.md), [`java-springboot/README.md`](java-springboot/README.md), [`python-django/README.md`](python-django/README.md).
-> - **Want CI parity and pinned tooling?** Jump to [`#ci`](#ci) — `.ci-tool-versions.sh` is the **single source of truth** for local + GitHub CI.
+> - **Want pinned tooling + local checks?** Jump to [`#ci`](#ci) — `.ci-tool-versions.sh` is the **single source of truth** for tool pins.
 
 ---
 
@@ -75,10 +75,10 @@ This project is intentionally built as a **production-minded reference lab** (no
 - **Operator-facing hardening behaviors**: explicit timeouts + graceful shutdown semantics (`SIGTERM`), request/payload limits (**clear `413` behavior**), trusted proxy controls for correct `X-Forwarded-*` handling, and health/readiness checks enforced via **Compose**.
 - **Composable environment “shapes” with strong local parity**: **development** (apps only), **integration** (apps + observability), and **staging** (registry pulls / “build once, deploy many”) using modular Compose building blocks.
 - **Observability you can rely on**: **Prometheus scrape** for metrics, **JSON logs** shipped via **Alloy → Loki**, and **OTLP traces** via **Alloy → Tempo** — correlated in **Grafana**.
-- **High-signal CI with local parity**: `.ci-tool-versions.sh` is the **single source of truth** for pinned toolchains; it’s consumed by both `.ci-local.sh` and `.github/workflows/ci.yaml` to minimize “works on my machine” drift. Security/dependency checks are part of the normal workflow.
-
+- **High-signal CI with pinned tooling and local confidence checks**: `.ci-tool-versions.sh` is the **single source of truth** for pinned toolchains; it’s consumed by both `.ci-local.sh` and `.github/workflows/ci.yaml` to reduce drift. `.ci-local.sh` runs a fixed set of gates locally (not an event simulator).
 > [!NOTE]
 > For the implementation details of each item (Dockerfiles, Compose hardening, CI gates, and service-specific behaviors), see the per-module README.md docs.
+
 ---
 
 ## Why a hybrid observability approach
@@ -461,24 +461,21 @@ See: [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) (workflow) and [`.
 > [!NOTE]
 > GitHub Actions only discovers workflows from **`.github/workflows/`**. If you’re viewing this project from an archive that strips dot-directories, double-check the repo still contains `.github/workflows` when pushed to GitHub.
 
-### Local CI parity: `.ci-local.sh`
+### Local checks: `.ci-local.sh`
 
 > [!NOTE]
-> `.ci-local.sh` is a local confidence runner that mirrors CI **intent and major gates**, not the GitHub Actions runtime exactly
-> (e.g., caching, SARIF upload, dependency review, and releases remain workflow-specific).
-> The GitHub workflow (`.github/workflows/ci.yaml`) is the source of truth for action-only behavior.
+> `.ci-local.sh` is a **local checker** that runs a **fixed set of high-signal gates** (format/lint/test/coverage/security).
+> It **does not simulate CI events** (push/PR/schedule) and does not attempt to match GitHub Actions runtime details
+> (caching, SARIF upload, dependency review, release/tag behavior, etc.).  
+> The GitHub workflow (`.github/workflows/ci.yaml`) remains the source of truth for CI-only behavior.
 
 ```bash
 ./.ci-local.sh --help                       # or: -h
 
-./.ci-local.sh                              # default parity flow (push-like): trivy_repo + go + java + python
-CI_EVENT_NAME=pull_request ./.ci-local.sh   # simulate PR: includes policy_check
-CI_EVENT_NAME=schedule ./.ci-local.sh       # simulate weekly: trivy_repo + docker image builds + scans
-
+./.ci-local.sh                              # default: trivy_repo + go + java + python
 ./.ci-local.sh trivy_repo                   # repo scan only
 ./.ci-local.sh docker                       # docker builds + image scans only
 ./.ci-local.sh doctor all --summary         # preflight checks (recommended)
-```
 
 Tool pins live in: [`.ci-tool-versions.sh`](.ci-tool-versions.sh) — the **single source of truth** consumed by **`.ci-local.sh`** and the **GitHub Actions workflow** (via **`.github/actions/load-tool-versions`**).
 

@@ -1,9 +1,6 @@
-# Single source of truth for tool versions used by:
-#  - .ci-local.sh (via `source .ci-tool-versions.sh`)
-#  - GitHub Actions (via .github/actions/load-tool-versions)
-#
-# Not meant to be executed directly (don’t run `./.ci-tool-versions.sh`).
-# Keep it to simple KEY=VALUE lines (no logic, no side effects).
+# shellcheck shell=bash
+
+# This file is sourced by CI/local scripts. Do not execute.
 
 # Go + Gin CI
 GOIMPORTS_VERSION=v0.41.0

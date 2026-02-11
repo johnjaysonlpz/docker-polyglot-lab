@@ -6,8 +6,6 @@ on:
     branches: [ main, master ]
     tags: [ "v*" ]
   pull_request:
-  schedule:
-    - cron: "00 12 * * 1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -26,11 +24,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      ci: ${{ steps.tag.outputs.all == 'true' || steps.paths.outputs.ci == 'true' }}
-      security: ${{ steps.tag.outputs.all == 'true' || steps.paths.outputs.security == 'true' || steps.paths.outputs.ci == 'true' }}
-      golang: ${{ steps.tag.outputs.all == 'true' || steps.paths.outputs.golang == 'true' || steps.paths.outputs.ci == 'true' }}
-      java: ${{ steps.tag.outputs.all == 'true' || steps.paths.outputs.java == 'true' || steps.paths.outputs.ci == 'true' }}
-      python: ${{ steps.tag.outputs.all == 'true' || steps.paths.outputs.python == 'true' || steps.paths.outputs.ci == 'true' }}
+      ci: ${{ steps.final.outputs.ci }}
+      security: ${{ steps.final.outputs.security }}
+      golang: ${{ steps.final.outputs.golang }}
+      java: ${{ steps.final.outputs.java }}
+      python: ${{ steps.final.outputs.python }}
     steps:
       - name: Detect - tag release or manual run (force run)
         id: tag
@@ -42,6 +40,12 @@ jobs:
             echo "all=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Notice - force run skips checkout/path filter
+        if: ${{ steps.tag.outputs.all == 'true' }}
+        shell: bash
+        run: |
+          echo "Force run: skipping checkout + paths-filter; all jobs enabled."
+
       - name: Checkout (push/PR)
         if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && steps.tag.outputs.all != 'true' }}
         uses: actions/checkout@v6
@@ -51,7 +55,7 @@ jobs:
 
       - name: Filter - changed paths
         id: paths
-        if: ${{ steps.tag.outputs.all != 'true' && github.event_name != 'schedule' }}
+        if: ${{ steps.tag.outputs.all != 'true' }}
         uses: dorny/paths-filter@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -80,6 +84,51 @@ jobs:
               - '.ci-tool-versions.sh'
               - '.ci-local.sh'
 
+      - name: Compute - final changed areas outputs
+        id: final
+        shell: bash
+        env:
+          FORCE_ALL: ${{ steps.tag.outputs.all }}
+          PATHS_CI: ${{ steps.paths.outputs.ci }}
+          PATHS_SECURITY: ${{ steps.paths.outputs.security }}
+          PATHS_GOLANG: ${{ steps.paths.outputs.golang }}
+          PATHS_JAVA: ${{ steps.paths.outputs.java }}
+          PATHS_PYTHON: ${{ steps.paths.outputs.python }}
+        run: |
+          set -Eeuo pipefail
+
+          ci=false
+          security=false
+          golang=false
+          java=false
+          python=false
+
+          if [[ "${FORCE_ALL}" == "true" ]]; then
+            ci=true
+            security=true
+            golang=true
+            java=true
+            python=true
+          else
+            PATHS_CI="${PATHS_CI:-false}"
+            PATHS_SECURITY="${PATHS_SECURITY:-false}"
+            PATHS_GOLANG="${PATHS_GOLANG:-false}"
+            PATHS_JAVA="${PATHS_JAVA:-false}"
+            PATHS_PYTHON="${PATHS_PYTHON:-false}"
+
+            if [[ "${PATHS_CI}" == "true" ]]; then ci=true; fi
+            if [[ "${PATHS_CI}" == "true" || "${PATHS_SECURITY}" == "true" ]]; then security=true; fi
+            if [[ "${PATHS_CI}" == "true" || "${PATHS_GOLANG}" == "true" ]]; then golang=true; fi
+            if [[ "${PATHS_CI}" == "true" || "${PATHS_JAVA}" == "true" ]]; then java=true; fi
+            if [[ "${PATHS_CI}" == "true" || "${PATHS_PYTHON}" == "true" ]]; then python=true; fi
+          fi
+
+          echo "ci=${ci}" >> "$GITHUB_OUTPUT"
+          echo "security=${security}" >> "$GITHUB_OUTPUT"
+          echo "golang=${golang}" >> "$GITHUB_OUTPUT"
+          echo "java=${java}" >> "$GITHUB_OUTPUT"
+          echo "python=${python}" >> "$GITHUB_OUTPUT"
+
   policy:
     name: Policy - protect CI control files
     runs-on: ubuntu-latest
@@ -95,6 +144,34 @@ jobs:
         run: |
           set -Eeuo pipefail
 
+          need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing $1" >&2; exit 2; }; }
+          need_env() { [[ -n "${!1:-}" ]] || { echo "ERROR: missing env $1" >&2; exit 2; }; }
+
+          need_cmd curl
+          need_cmd jq
+          need_env GH_TOKEN
+          need_env REPO
+          need_env PR_NUMBER
+
+          curl_json() {
+            local url="$1"
+            local attempt=1
+            local resp=""
+            while (( attempt <= 5 )); do
+              if resp="$(curl -fsSL \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "$url")"; then
+                echo "$resp"
+                return 0
+              fi
+              sleep $((attempt * 2))
+              attempt=$((attempt + 1))
+            done
+            echo "ERROR: GitHub API request failed after retries: $url" >&2
+            exit 1
+          }
+
           actor="${{ github.actor }}"
           maintainers="${CI_MAINTAINERS:-}"
           maintainers="$(echo "$maintainers" | tr '\n\t' '  ' | xargs)"
@@ -104,23 +181,16 @@ jobs:
             exit 0
           fi
 
-          protected_regex='^(\.ci-tool-versions\.sh|\.ci-local\.sh|\.github/workflows/.*\.ya?ml|\.github/actions/.*\.ya?ml)$'
+          protected_regex='^(\.bootstrap-local\.sh|\.ci-tool-versions\.sh|\.ci-local\.sh|\.github/workflows/|\.github/actions/)'
 
           page=1
           changed=""
           while :; do
-            resp="$(curl -sSf \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100&page=${page}")"
-
-            files="$(echo "$resp" | jq -r '.[].filename' || true)"
+            resp="$(curl_json "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100&page=${page}")"
+            files="$(echo "$resp" | jq -r '.[].filename')"
             [[ -z "${files// }" ]] && break
-
             changed+="${files}"$'\n'
-
-            count="$(echo "$resp" | jq 'length')"
-            [[ "$count" -lt 100 ]] && break
+            [[ "$(echo "$resp" | jq 'length')" -lt 100 ]] && break
             page=$((page+1))
           done
 
@@ -138,12 +208,26 @@ jobs:
         if: ${{ github.event_name != 'pull_request' }}
         run: echo "Policy check skipped (not a PR)."
 
+  dependency_review:
+    name: Security - dependency review (PR only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [ policy ]
+    if: ${{ github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+
   trivy_repo:
     name: Security - Trivy (repo) + SARIF
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [ policy ]
-    if: ${{ github.event_name != 'schedule' }}
     permissions:
       contents: read
       security-events: write
@@ -235,7 +319,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [ policy, changes ]
-    if: ${{ github.event_name != 'schedule' && needs.changes.outputs.golang == 'true' }}
+    if: needs.changes.outputs.golang == 'true'
     defaults:
       run:
         working-directory: golang-gin
@@ -261,19 +345,13 @@ jobs:
           : "${GOVULNCHECK_VERSION:?GOVULNCHECK_VERSION is empty}"
           : "${GOLANGCI_LINT_VERSION:?GOLANGCI_LINT_VERSION is empty}"
 
-      - name: Security - dependency review (PR only)
-        if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: moderate
-
       - name: Setup - Go toolchain
         id: go
         uses: actions/setup-go@v6
         with:
           go-version-file: golang-gin/go.mod
           cache-dependency-path: golang-gin/go.sum
-          check-latest: true
+          check-latest: false
 
       - name: Cache - Go tools (goimports, govulncheck)
         id: cache_go_tools
@@ -311,10 +389,16 @@ jobs:
       - name: Quality - format/import checks (gofmt, goimports)
         shell: bash
         run: |
+          set -Eeuo pipefail
           GO_DIRS="$(go list -f '{{.Dir}}' ./...)"
           if [[ -n "$GO_DIRS" ]]; then
             test -z "$(printf '%s\n' "$GO_DIRS" | xargs -r gofmt -l)"
-            test -z "$(printf '%s\n' "$GO_DIRS" | xargs -r goimports -l -local "${GO_MODULE}")"
+
+            if [[ -n "${GO_MODULE:-}" ]]; then
+              test -z "$(printf '%s\n' "$GO_DIRS" | xargs -r goimports -l -local "${GO_MODULE}")"
+            else
+              test -z "$(printf '%s\n' "$GO_DIRS" | xargs -r goimports -l)"
+            fi
           fi
 
       - name: Quality - lint (golangci-lint)
@@ -361,14 +445,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Security - vulnerability scan (govulncheck) (push/tags only)
-        if: github.event_name == 'push'
+      - name: Security - vulnerability scan (govulncheck) (push + internal PRs)
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         run: |
           set -o pipefail
           govulncheck -test ./... | tee govulncheck.txt
 
-      - name: Artifact - upload govulncheck report (push/tags only)
-        if: github.event_name == 'push' && always()
+      - name: Artifact - upload govulncheck report (push + internal PRs)
+        if: (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && always()
         uses: actions/upload-artifact@v6
         with:
           name: go-gin-govulncheck
@@ -381,7 +465,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     needs: [ policy, changes ]
-    if: ${{ github.event_name != 'schedule' && needs.changes.outputs.java == 'true' }}
+    if: needs.changes.outputs.java == 'true'
     defaults:
       run:
         working-directory: java-springboot
@@ -407,12 +491,6 @@ jobs:
           : "${DEPENDENCY_CHECK_MAVEN_VERSION:?DEPENDENCY_CHECK_MAVEN_VERSION is empty}"
           : "${DEPENDENCY_CHECK_FAIL_CVSS:?DEPENDENCY_CHECK_FAIL_CVSS is empty}"
 
-      - name: Security - dependency review (PR only)
-        if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: moderate
-
       - name: Setup - JDK 25 (Temurin)
         uses: actions/setup-java@v5
         with:
@@ -432,12 +510,12 @@ jobs:
           retention-days: 7
 
       - name: Compute cache epoch (weekly)
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         shell: bash
         run: echo "ODC_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
 
-      - name: Cache - OWASP Dependency-Check data (push/tags only)
-        if: github.event_name == 'push'
+      - name: Cache - OWASP Dependency-Check data (push + internal PRs)
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         uses: actions/cache@v5
         with:
           path: ${{ env.ODC_DATA_DIR }}
@@ -445,8 +523,8 @@ jobs:
           restore-keys: |
             dependency-check-${{ runner.os }}-${{ env.DEPENDENCY_CHECK_MAVEN_VERSION }}-
 
-      - name: Security - OWASP Dependency-Check scan (push/tags only)
-        if: github.event_name == 'push'
+      - name: Security - OWASP Dependency-Check scan (push + internal PRs)
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
@@ -456,8 +534,8 @@ jobs:
             -DdataDirectory="${ODC_DATA_DIR}" \
             -DnvdApiKeyEnvironmentVariable=NVD_API_KEY
 
-      - name: Artifact - upload Dependency-Check reports (push/tags only)
-        if: github.event_name == 'push' && always()
+      - name: Artifact - upload Dependency-Check reports (push + internal PRs)
+        if: (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && always()
         uses: actions/upload-artifact@v6
         with:
           name: java-springboot-dependency-check
@@ -472,7 +550,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [ policy, changes ]
-    if: ${{ github.event_name != 'schedule' && needs.changes.outputs.python == 'true' }}
+    if: needs.changes.outputs.python == 'true'
     defaults:
       run:
         working-directory: python-django
@@ -496,12 +574,6 @@ jobs:
           : "${PIP_TOOLS_VERSION:?PIP_TOOLS_VERSION is empty}"
           : "${PIP_MAX_VERSION:?PIP_MAX_VERSION is empty}"
           : "${PIP_AUDIT_VERSION:?PIP_AUDIT_VERSION is empty}"
-
-      - name: Security - dependency review (PR only)
-        if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: moderate
 
       - name: Setup - Python 3.12
         uses: actions/setup-python@v6
@@ -586,144 +658,22 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Security - vulnerability scan (pip-audit) (push/tags only)
-        if: github.event_name == 'push'
+      - name: Security - vulnerability scan (pip-audit) (push + internal PRs)
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         run: |
           . .venv-ci/bin/activate
           python -m pip install "pip-audit==${PIP_AUDIT_VERSION}"
           pip-audit -r requirements.lock --format=json --output=pip-audit.json
           pip-audit -r requirements.lock
 
-      - name: Artifact - upload pip-audit report (push/tags only)
-        if: github.event_name == 'push' && always()
+      - name: Artifact - upload pip-audit report (push + internal PRs)
+        if: (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && always()
         uses: actions/upload-artifact@v6
         with:
           name: python-django-pip-audit
           path: python-django/pip-audit.json
           if-no-files-found: warn
           retention-days: 7
-
-  docker_weekly:
-    name: Docker - build + Trivy scan (weekly)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: [ policy ]
-    if: github.event_name == 'schedule'
-    permissions:
-      contents: read
-      security-events: write
-    env:
-      TRIVY_VERSION: ""
-      TRIVY_CACHE_EPOCH: ""
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: golang-gin-app
-            context: ./golang-gin
-          - image: java-springboot-app
-            context: ./java-springboot
-          - image: python-django-app
-            context: ./python-django
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Setup - load pinned tool versions
-        uses: ./.github/actions/load-tool-versions
-
-      - name: Validate - tool versions loaded
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          : "${TRIVY_VERSION:?TRIVY_VERSION is empty (load-tool-versions failed?)}"
-
-      - name: Compute - Trivy cache epoch (weekly)
-        shell: bash
-        run: echo "TRIVY_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
-
-      - name: Cache - Trivy DB/cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ github.workspace }}/.cache/trivy
-          key: trivy-${{ runner.os }}-${{ env.TRIVY_VERSION }}-${{ env.TRIVY_CACHE_EPOCH }}
-          restore-keys: |
-            trivy-${{ runner.os }}-${{ env.TRIVY_VERSION }}-
-
-      - name: Setup - Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build - image (local for Trivy scan)
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.context }}
-          load: true
-          tags: local/${{ matrix.image }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            RUN_TESTS=false
-            SERVICE_NAME=${{ matrix.image }}
-            VERSION=weekly
-            BUILD_TIME=${{ github.run_id }}
-            OCI_IMAGE_SOURCE=https://github.com/${{ github.repository }}
-            OCI_IMAGE_REVISION=${{ github.sha }}
-
-      - name: Security - Trivy scan (image) (table, gate HIGH/CRITICAL)
-        id: trivy_img_table_weekly
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@0.33.1
-        with:
-          version: ${{ env.TRIVY_VERSION }}
-          cache-dir: ${{ github.workspace }}/.cache/trivy
-          scan-type: image
-          scan-ref: local/${{ matrix.image }}:${{ github.sha }}
-          scanners: vuln,misconfig,secret
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          format: table
-          output: trivy-image-${{ matrix.image }}.txt
-          exit-code: "1"
-
-      - name: Trivy - scan image -> SARIF
-        if: always()
-        uses: aquasecurity/trivy-action@0.33.1
-        with:
-          version: ${{ env.TRIVY_VERSION }}
-          cache-dir: ${{ github.workspace }}/.cache/trivy
-          scan-type: image
-          scan-ref: local/${{ matrix.image }}:${{ github.sha }}
-          scanners: vuln,misconfig,secret
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          format: sarif
-          output: trivy-image-${{ matrix.image }}.sarif
-          exit-code: "0"
-
-      - name: Upload - SARIF to GitHub Code Scanning (image)
-        if: always()
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy-image-${{ matrix.image }}.sarif
-          category: trivy-image-${{ matrix.image }}
-
-      - name: Artifact - upload Trivy image report (table)
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: trivy-image-${{ matrix.image }}
-          path: trivy-image-${{ matrix.image }}.txt
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Gate - fail if Trivy image scan found HIGH/CRITICAL
-        if: steps.trivy_img_table_weekly.outcome == 'failure'
-        shell: bash
-        run: exit 1
 
   docker_release:
     name: Docker - build + Trivy scan + push (tags)
@@ -895,17 +845,43 @@ jobs:
           DH_PASS: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set +e
+
+          need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "WARN: missing $1; skipping cleanup." >&2; return 1; }; }
+          need_cmd curl || exit 0
+          need_cmd jq || exit 0
+
           repo="${{ env.DOCKERHUB_NAMESPACE }}/${{ matrix.image }}"
           tag="ci-${{ github.sha }}"
 
-          token="$(curl -sSf -H "Content-Type: application/json" \
-            -d "{\"username\":\"${DH_USER}\",\"password\":\"${DH_PASS}\"}" \
-            https://hub.docker.com/v2/users/login/ | jq -r '.token' 2>/dev/null)"
+          retry() {
+            local n=1 max=5 base_delay=2
+            while (( n <= max )); do
+              if "$@"; then
+                return 0
+              fi
+              sleep $((base_delay * n))
+              n=$((n + 1))
+            done
+            return 1
+          }
 
-          if [[ -n "${token:-}" && "${token}" != "null" ]]; then
-            curl -sSf -X DELETE \
+          get_token() {
+            curl -fsSL -H "Content-Type: application/json" \
+              -d "{\"username\":\"${DH_USER}\",\"password\":\"${DH_PASS}\"}" \
+              https://hub.docker.com/v2/users/login/ \
+              | jq -r '.token'
+          }
+
+          delete_tag() {
+            local token="$1"
+            curl -fsSL -X DELETE \
               -H "Authorization: JWT ${token}" \
-              "https://hub.docker.com/v2/repositories/${repo}/tags/${tag}/" || true
+              "https://hub.docker.com/v2/repositories/${repo}/tags/${tag}/"
+          }
+
+          token="$(retry get_token)"
+          if [[ -n "${token:-}" && "${token}" != "null" ]]; then
+            retry delete_tag "$token" || true
           else
             echo "Docker Hub API token unavailable; skipping cleanup."
           fi
@@ -923,10 +899,10 @@ jobs:
           digest="${{ steps.build.outputs.digest }}"
 
           echo "Promoting ${image}@${digest} to:"
-          echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n'
+          printf '%s\n' "${{ steps.meta.outputs.tags }}" | tr ',\n' '\n' | sed '/^[[:space:]]*$/d'
 
           while IFS= read -r tag; do
             tag="$(echo "$tag" | xargs)"
             [[ -z "$tag" ]] && continue
             docker buildx imagetools create -t "$tag" "${image}@${digest}"
-          done < <(echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n')
+          done < <(printf '%s\n' "${{ steps.meta.outputs.tags }}" | tr ',\n' '\n' | sed '/^[[:space:]]*$/d')

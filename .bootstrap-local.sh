@@ -113,57 +113,31 @@ trap 'on_err "$?" "$LINENO" "${BASH_COMMAND:-}"' ERR
 
 usage() {
   cat <<'TXT'
-bootstrap-local: one-time local setup (secrets, permissions, provisioning)
+bootstrap-local: one-time local setup
 
 USAGE
   ./.bootstrap-local.sh [--dry-run] [--help]
 
-QUICK START
-  # Set required secrets (recommended: do this in a local .env file, then export)
-  export GRAFANA_ADMIN_USER=admin
-  export GRAFANA_ADMIN_PASSWORD='secret'
-  export TELEGRAM_BOT_TOKEN='...'
-  export TELEGRAM_CHAT_ID='...'
+ENV
+  LOG_LEVEL=quiet|info|debug  (default: info)
 
-  # Run bootstrap
-  ./.bootstrap-local.sh
-
-  # Preview changes without writing anything
-  LOG_LEVEL=debug ./.bootstrap-local.sh --dry-run
-
-WHAT THIS SCRIPT CHANGES
-  - Creates/locks down docker/secrets (strict perms, refuses symlinks)
-  - Writes Grafana + Alertmanager secret files (0400, service UID/GID)
-  - Ensures Prometheus entrypoint is executable
-  - Ensures Grafana provisioning directories exist with standard perms
-
-OPTIONS
-  --dry-run     Print actions without making changes
-  --help, -h    Show this help
-
-COMMON OPTIONS / ENV
-  Logging:
-    LOG_LEVEL=quiet|info|debug          (default: info)
-
-  Required secrets:
+  Required:
     GRAFANA_ADMIN_USER
     GRAFANA_ADMIN_PASSWORD
     TELEGRAM_BOT_TOKEN
     TELEGRAM_CHAT_ID
 
-  Optional UID/GID overrides (advanced):
-    GRAFANA_UID=<uid>                   (default: 472)
-    GRAFANA_GID=<gid>                   (default: 0)
-    ALERTMANAGER_UID=<uid>              (default: 65534)
-    ALERTMANAGER_GID=<gid>              (default: 65534)
+  Optional:
+    GRAFANA_UID=<uid>         (default: 472)
+    GRAFANA_GID=<gid>         (default: 0)
+    ALERTMANAGER_UID=<uid>    (default: 65534)
+    ALERTMANAGER_GID=<gid>    (default: 65534)
 
-  Security data (only needed for OWASP Dependency-Check elsewhere):
-    NVD_API_KEY                         (no default)
-
-NOTES
-  - Uses sudo when not run as root.
-  - Refuses to write secrets to symlinks.
-  - Refuses to proceed if anything under docker/secrets is tracked by git.
+CHANGES
+  - docker/secrets permissions + safety checks (no symlinks, not git-tracked)
+  - Grafana + Alertmanager secret files (0400, service UID/GID)
+  - Prometheus entrypoint executable bit
+  - Grafana provisioning directories + perms
 
 EXAMPLES
   ./.bootstrap-local.sh
