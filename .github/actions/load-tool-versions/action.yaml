@@ -1,6 +1,5 @@
 name: Load tool versions
-
-description: Export .ci-tool-versions.sh KEY=VALUE lines into GITHUB_ENV
+description: Export .ci-tool-versions.sh KEY=VALUE lines into GITHUB_ENV (strict)
 
 runs:
   using: composite
@@ -8,5 +7,21 @@ runs:
     - shell: bash
       run: |
         set -Eeuo pipefail
-        test -f .ci-tool-versions.sh
-        grep -E '^[A-Z0-9_]+=.*$' .ci-tool-versions.sh >> "$GITHUB_ENV"
+
+        file=".ci-tool-versions.sh"
+        [[ -f "$file" ]] || { echo "ERROR: missing $file" >&2; exit 2; }
+
+        while IFS= read -r raw || [[ -n "$raw" ]]; do
+          line="${raw%$'\r'}"
+
+          [[ -z "$line" ]] && continue
+          [[ "$line" =~ ^# ]] && continue
+
+          if [[ "$line" =~ ^[A-Z][A-Z0-9_]*=[A-Za-z0-9._+/-]+$ ]]; then
+            echo "$line" >> "$GITHUB_ENV"
+          else
+            echo "ERROR: invalid line in $file (must be KEY=VALUE; value limited to [A-Za-z0-9._+-]):" >&2
+            printf '  %q\n' "$raw" >&2
+            exit 2
+          fi
+        done < "$file"

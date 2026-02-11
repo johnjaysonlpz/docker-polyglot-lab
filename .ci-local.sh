@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------------------------
-# Mirrors CI gates and intent; CI workflow (.github/workflows/ci.yaml)
+# .ci-local.sh
+# Runs a fixed set of checks that mirror CI intent, without CI event emulation.
 # ------------------------------------------------------------------------------
 
 set -Eeuo pipefail
@@ -29,6 +30,29 @@ warn() { printf "WARN: %s\n" "$*" >&2; }
 die()  { printf "ERROR: %s\n" "$*" >&2; exit "${2:-1}"; }
 
 # ------------------------------------------------------------------------------
+# Fixed defaults (no CI knobs)
+# ------------------------------------------------------------------------------
+
+TRIVY_SCANNERS_DEFAULT="vuln,misconfig,secret"
+TRIVY_SEVERITY_DEFAULT="HIGH,CRITICAL"
+TRIVY_TIMEOUT_DEFAULT="10m0s"
+TRIVY_SCAN_RETRIES_DEFAULT=2
+
+DOCKER_USE_BUILDX_DEFAULT=1
+DOCKER_PULL_BASE_DEFAULT=1
+DOCKER_BUILD_RETRIES_DEFAULT=2
+
+PY_CLEAN_VENV_DEFAULT=1
+
+# OWASP Dependency-Check defaults (fixed; only NVD_API_KEY is optional)
+ODC_STRICT_DEFAULT=0
+ODC_RETRIES_DEFAULT=2
+ODC_PURGE_ON_FAIL_DEFAULT=1
+ODC_NVD_API_DELAY_MS_DEFAULT=3500
+ODC_NVD_MAX_RETRY_COUNT_DEFAULT=10
+ODC_NVD_VALID_FOR_HOURS_DEFAULT=24
+
+# ------------------------------------------------------------------------------
 # Repo root + global paths
 # ------------------------------------------------------------------------------
 
@@ -52,7 +76,7 @@ readonly ARTIFACTS_DIR ARTIFACTS_GO_DIR ARTIFACTS_JAVA_DIR ARTIFACTS_PY_DIR ARTI
 CURRENT_MODULE=""
 
 # ------------------------------------------------------------------------------
-# Core helpers (safe under set -eE)
+# Core helpers
 # ------------------------------------------------------------------------------
 
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1" 127; }
@@ -197,34 +221,7 @@ on_err() {
 trap 'on_err "$?" "$LINENO" "${BASH_COMMAND:-}" "${FUNCNAME[0]:-main}"' ERR
 
 # ------------------------------------------------------------------------------
-# CI event helpers + parity controls
-# ------------------------------------------------------------------------------
-
-validate_ci_event_name() {
-  local v="${CI_EVENT_NAME:-push}"
-  case "$v" in
-    push|pull_request|schedule) ;;
-    *)
-      die "CI_EVENT_NAME must be 'push', 'pull_request', or 'schedule' (got: $v)" 2
-      ;;
-  esac
-}
-
-is_push()     { [[ "${CI_EVENT_NAME:-push}" == "push" ]]; }
-is_pr()       { [[ "${CI_EVENT_NAME:-push}" == "pull_request" ]]; }
-is_schedule() { [[ "${CI_EVENT_NAME:-push}" == "schedule" ]]; }
-is_tag()      { [[ -n "${CI_TAG_NAME:-}" ]]; }
-
-CI_EVENT_NAME="${CI_EVENT_NAME:-push}"
-export CI_EVENT_NAME
-validate_ci_event_name
-debug "CI_EVENT_NAME=${CI_EVENT_NAME}"
-
-CI_RELEASE_MODE="${CI_RELEASE_MODE:-0}"
-export CI_RELEASE_MODE
-
-# ------------------------------------------------------------------------------
-# Tool versions (centralized)
+# Tool versions
 # ------------------------------------------------------------------------------
 
 VERSIONS_FILE="${ROOT_DIR}/.ci-tool-versions.sh"
@@ -278,50 +275,11 @@ go_bin_dir() {
 }
 
 # ------------------------------------------------------------------------------
-# Global prereqs (cheap checks; deeper checks happen in each module)
+# Global prereqs
 # ------------------------------------------------------------------------------
 
 need_cmd git
 need_cmd python3.12
-
-# ------------------------------------------------------------------------------
-# PR policy parity gate
-# ------------------------------------------------------------------------------
-
-policy_check() {
-  is_pr || return 0
-
-  local actor="${CI_ACTOR:-${USER:-unknown}}"
-  if [[ "$actor" == "johnjaysonlpz" ]]; then
-    debug "policy_check: bypass (actor=$actor)"
-    return 0
-  fi
-
-  need_cmd git
-  GIT_TERMINAL_PROMPT=0 git fetch origin --prune >/dev/null 2>&1 || true
-
-  local base_ref="${CI_PR_BASE_REF:-}"
-  if [[ -z "$base_ref" ]]; then
-    if git show-ref --verify --quiet refs/remotes/origin/main; then
-      base_ref="origin/main"
-    elif git show-ref --verify --quiet refs/remotes/origin/master; then
-      base_ref="origin/master"
-    else
-      base_ref="HEAD~1"
-      warn "policy_check: could not find origin/main or origin/master; using ${base_ref}"
-    fi
-  fi
-
-  local changed
-  changed="$(git diff --name-only "${base_ref}...HEAD" 2>/dev/null || true)"
-
-  protected_regex='^(\.ci-tool-versions\.sh|\.ci-local\.sh|\.github/workflows/.*\.ya?ml|\.github/actions/.*\.ya?ml)$'
-  if echo "$changed" | grep -E "$protected_regex" >/dev/null 2>&1; then
-    local protected
-    protected="$(echo "$changed" | grep -E "$protected_regex" || true)"
-    die $'Policy: PR modifies protected CI control files (actor='"${actor}"$')\n'"${protected}"$'\nFix: open a separate PR or request maintainer assistance.' 1
-  fi
-}
 
 # ------------------------------------------------------------------------------
 # Doctor mode
@@ -516,12 +474,7 @@ doctor() {
     warn "doctor: git working tree is not clean (CI runs on a clean checkout)."
   fi
 
-  local workflow_file="${ROOT_DIR}/.github/workflows/ci.yaml"
   doctor_require_file "$VERSIONS_FILE" || true
-  if [[ ! -f "$workflow_file" ]]; then
-    warn "doctor: workflow not found at ${workflow_file} (parity checks expect it there)."
-  fi
-
   doctor_scan_non_ascii "${BASH_SOURCE[0]}" "$VERSIONS_FILE" >/dev/null || true
 
   declare -gA mod_status mod_issues
@@ -563,7 +516,7 @@ doctor() {
   fi
 
   if [[ "$total_issues" -ne 0 ]]; then
-    die "Doctor failed with ${total_issues} issue(s). Fix warnings above before running CI steps." 2
+    die "Doctor failed with ${total_issues} issue(s). Fix warnings above before running checks." 2
   fi
 
   say "Doctor OK"
@@ -638,7 +591,7 @@ install_golangci_lint_cached() {
 run_go() {
   CURRENT_MODULE="go"
   record_summary go status RUNNING
-  record_summary go security "govulncheck=$( is_push && echo on || echo off )"
+  record_summary go security "govulncheck=on"
 
   say "Go / Gin - quality, tests, security"
 
@@ -693,14 +646,14 @@ run_go() {
     say "Quality - static analysis (go vet)"
     go vet ./...
 
-    say "Setup - system deps for race detector (CGO) [local prereq: gcc]"
+    say "Setup - system deps for race detector (CGO)"
     need_cmd gcc
 
     say "Test - unit tests (race, shuffle) + coverage profile"
     CGO_ENABLED=1 go test ./... -race -shuffle=on -count=1 \
       -covermode=atomic -coverprofile=coverage.out
 
-    say "Coverage - enforce 100%% statements (Go)"
+    say "Coverage - enforce 100% statements (Go)"
     python3.12 - <<'PY'
 import re, subprocess, sys
 out = subprocess.check_output(["go", "tool", "cover", "-func=coverage.out"], text=True)
@@ -718,21 +671,17 @@ PY
     [[ -n "$go_cov" ]] || die "could not parse Go coverage percent" 2
     record_summary go coverage "$go_cov"
 
-    say "Artifact - coverage profile"
+    say "Artifact - coverage profile (coverage.out)"
     test -f coverage.out
     copy_artifact "coverage.out" "$ARTIFACTS_GO_DIR" "coverage.out"
 
-    if is_push; then
-      say "Security - vulnerability scan (govulncheck) (push/tags only)"
-      set -o pipefail
-      govulncheck -test ./... | tee govulncheck.txt
+    say "Security - vulnerability scan (govulncheck)"
+    set -o pipefail
+    govulncheck -test ./... | tee govulncheck.txt
 
-      say "Artifact - govulncheck report"
-      [[ -f govulncheck.txt ]] || warn "expected govulncheck.txt but it was not created."
-      copy_artifact "govulncheck.txt" "$ARTIFACTS_GO_DIR" "govulncheck.txt"
-    else
-      say "Security - vulnerability scan (govulncheck) (push/tags only) [skipped: CI_EVENT_NAME=$CI_EVENT_NAME]"
-    fi
+    say "Artifact - govulncheck report"
+    [[ -f govulncheck.txt ]] || warn "expected govulncheck.txt but it was not created."
+    copy_artifact "govulncheck.txt" "$ARTIFACTS_GO_DIR" "govulncheck.txt"
 
     say "Go / Gin - OK"
   )
@@ -748,7 +697,7 @@ PY
 run_java() {
   CURRENT_MODULE="java"
   record_summary java status RUNNING
-  record_summary java security "dependency-check=$( is_push && echo on || echo off )"
+  record_summary java security "dependency-check=on"
 
   say "Java / Spring Boot - Spotless, SpotBugs, tests, JaCoCo, security"
 
@@ -763,7 +712,7 @@ run_java() {
     say "Build - verify (Spotless, SpotBugs, tests, JaCoCo)"
     mvn -B -ntp verify
 
-    say "Artifact - JaCoCo report directory [local check]"
+    say "Artifact - JaCoCo report"
     [[ -d target/site/jacoco ]] || die "target/site/jacoco/ not found (JaCoCo expected from mvn verify)." 2
     [[ -f target/site/jacoco/jacoco.xml ]] || die "target/site/jacoco/jacoco.xml not found (needed for summary coverage)." 2
 
@@ -787,90 +736,86 @@ PY
 
     copy_artifact "target/site/jacoco/jacoco.xml" "$ARTIFACTS_JAVA_DIR" "jacoco.xml"
 
-    if is_push; then
-      say "Cache - OWASP Dependency-Check data (push/tags only) [local cache dir]"
-      local odc_data_dir
-      odc_data_dir="${ROOT_DIR}/.cache/dependency-check"
-      ensure_dir "$odc_data_dir"
+    say "Cache - OWASP Dependency-Check data (local)"
+    local odc_data_dir
+    odc_data_dir="${ROOT_DIR}/.cache/dependency-check"
+    ensure_dir "$odc_data_dir"
 
-      local odc_strict="${CI_ODC_STRICT:-0}"
-      local odc_retries="${CI_ODC_RETRIES:-2}"
-      local purge_on_fail="${CI_ODC_PURGE_ON_FAIL:-1}"
+    local odc_strict="${ODC_STRICT_DEFAULT}"
+    local odc_retries="${ODC_RETRIES_DEFAULT}"
+    local purge_on_fail="${ODC_PURGE_ON_FAIL_DEFAULT}"
 
-      local nvd_delay_ms="${CI_ODC_NVD_API_DELAY_MS:-3500}"
-      local nvd_max_retry="${CI_ODC_NVD_MAX_RETRY_COUNT:-10}"
-      local nvd_valid_hours="${CI_ODC_NVD_VALID_FOR_HOURS:-24}"
+    local nvd_delay_ms="${ODC_NVD_API_DELAY_MS_DEFAULT}"
+    local nvd_max_retry="${ODC_NVD_MAX_RETRY_COUNT_DEFAULT}"
+    local nvd_valid_hours="${ODC_NVD_VALID_FOR_HOURS_DEFAULT}"
 
-      local have_key=0
-      [[ -n "${NVD_API_KEY:-}" ]] && have_key=1
+    local have_key=0
+    [[ -n "${NVD_API_KEY:-}" ]] && have_key=1
 
-      local have_db=0
-      if ls "${odc_data_dir}"/*.mv.db >/dev/null 2>&1 || ls "${odc_data_dir}"/*.db >/dev/null 2>&1; then
-        have_db=1
-      fi
+    local have_db=0
+    if ls "${odc_data_dir}"/*.mv.db >/dev/null 2>&1 || ls "${odc_data_dir}"/*.db >/dev/null 2>&1; then
+      have_db=1
+    fi
 
-      local -a odc_cmd=(
-        mvn -B -ntp "org.owasp:dependency-check-maven:${DEPENDENCY_CHECK_MAVEN_VERSION}:check"
-        -DfailBuildOnCVSS="${DEPENDENCY_CHECK_FAIL_CVSS}"
-        -Dformats=HTML,JSON
-        -DdataDirectory="${odc_data_dir}"
-        -DnvdApiKeyEnvironmentVariable=NVD_API_KEY
-        -DnvdApiDelay="${nvd_delay_ms}"
-        -DnvdMaxRetryCount="${nvd_max_retry}"
-        -DnvdValidForHours="${nvd_valid_hours}"
-      )
+    local -a odc_cmd=(
+      mvn -B -ntp "org.owasp:dependency-check-maven:${DEPENDENCY_CHECK_MAVEN_VERSION}:check"
+      -DfailBuildOnCVSS="${DEPENDENCY_CHECK_FAIL_CVSS}"
+      -Dformats=HTML,JSON
+      -DdataDirectory="${odc_data_dir}"
+      -DnvdApiKeyEnvironmentVariable=NVD_API_KEY
+      -DnvdApiDelay="${nvd_delay_ms}"
+      -DnvdMaxRetryCount="${nvd_max_retry}"
+      -DnvdValidForHours="${nvd_valid_hours}"
+    )
 
-      local odc_skip=0
-      if [[ "$have_key" -eq 0 ]]; then
-        if [[ "$have_db" -eq 1 ]]; then
-          warn "NVD_API_KEY is not set; running Dependency-Check offline using cached data (autoUpdate=false, failOnError=false)."
-          odc_cmd+=(-DautoUpdate=false -DfailOnError=false)
-        else
-          warn "NVD_API_KEY is not set and no cached Dependency-Check DB found at ${odc_data_dir}; skipping Dependency-Check. Export NVD_API_KEY to enable."
-          record_summary java security "dependency-check=skipped(no-key)"
-          odc_skip=1
-        fi
+    local odc_skip=0
+    if [[ "$have_key" -eq 0 ]]; then
+      if [[ "$have_db" -eq 1 ]]; then
+        warn "NVD_API_KEY is not set; running Dependency-Check offline using cached data (autoUpdate=false, failOnError=false)."
+        odc_cmd+=(-DautoUpdate=false -DfailOnError=false)
       else
-        odc_cmd+=(-DfailOnError=true)
+        warn "NVD_API_KEY is not set and no cached Dependency-Check DB found at ${odc_data_dir}; skipping Dependency-Check. Export NVD_API_KEY to enable."
+        record_summary java security "dependency-check=skipped(no-key)"
+        odc_skip=1
       fi
+    else
+      odc_cmd+=(-DfailOnError=true)
+    fi
 
-      if [[ "$odc_skip" -eq 0 ]]; then
-        say "Security - OWASP Dependency-Check scan (push/tags only)"
+    if [[ "$odc_skip" -eq 0 ]]; then
+      say "Security - OWASP Dependency-Check scan"
+
+      set +e
+      retry "$odc_retries" "${odc_cmd[@]}"
+      local odc_rc=$?
+      set -e
+
+      if [[ "$odc_rc" -ne 0 && "$purge_on_fail" == "1" ]]; then
+        warn "Dependency-Check failed (rc=${odc_rc}). Purging local data dir and retrying once..."
+        rm -rf "$odc_data_dir" >/dev/null 2>&1 || true
+        ensure_dir "$odc_data_dir"
 
         set +e
         retry "$odc_retries" "${odc_cmd[@]}"
-        local odc_rc=$?
+        odc_rc=$?
         set -e
-
-        if [[ "$odc_rc" -ne 0 && "$purge_on_fail" == "1" ]]; then
-          warn "Dependency-Check failed (rc=${odc_rc}). Purging local data dir and retrying once..."
-          rm -rf "$odc_data_dir" >/dev/null 2>&1 || true
-          ensure_dir "$odc_data_dir"
-
-          set +e
-          retry "$odc_retries" "${odc_cmd[@]}"
-          odc_rc=$?
-          set -e
-        fi
-
-        if [[ "$odc_rc" -ne 0 ]]; then
-          if [[ "$odc_strict" == "1" ]]; then
-            die "Dependency-Check failed (rc=${odc_rc}). Hint: export NVD_API_KEY to avoid NVD rate limits (HTTP 429)." 2
-          fi
-          warn "Dependency-Check failed (rc=${odc_rc}) (non-gating locally). Hint: export NVD_API_KEY to avoid NVD rate limits (HTTP 429)."
-          record_summary java security "dependency-check=warn"
-        else
-          record_summary java security "dependency-check=on"
-        fi
-
-        say "Artifact - Dependency-Check reports"
-        [[ -f target/dependency-check-report.html ]] || warn "target/dependency-check-report.html not found."
-        [[ -f target/dependency-check-report.json ]] || warn "target/dependency-check-report.json not found."
-        copy_artifact "target/dependency-check-report.html" "$ARTIFACTS_JAVA_DIR" "dependency-check-report.html"
-        copy_artifact "target/dependency-check-report.json" "$ARTIFACTS_JAVA_DIR" "dependency-check-report.json"
       fi
-    else
-      say "Security - OWASP Dependency-Check scan (push/tags only) [skipped: CI_EVENT_NAME=$CI_EVENT_NAME]"
+
+      if [[ "$odc_rc" -ne 0 ]]; then
+        if [[ "$odc_strict" == "1" ]]; then
+          die "Dependency-Check failed (rc=${odc_rc}). Hint: export NVD_API_KEY to avoid NVD rate limits (HTTP 429)." 2
+        fi
+        warn "Dependency-Check failed (rc=${odc_rc}) (non-gating locally). Hint: export NVD_API_KEY to avoid NVD rate limits (HTTP 429)."
+        record_summary java security "dependency-check=warn"
+      else
+        record_summary java security "dependency-check=on"
+      fi
+
+      say "Artifact - Dependency-Check reports"
+      [[ -f target/dependency-check-report.html ]] || warn "target/dependency-check-report.html not found."
+      [[ -f target/dependency-check-report.json ]] || warn "target/dependency-check-report.json not found."
+      copy_artifact "target/dependency-check-report.html" "$ARTIFACTS_JAVA_DIR" "dependency-check-report.html"
+      copy_artifact "target/dependency-check-report.json" "$ARTIFACTS_JAVA_DIR" "dependency-check-report.json"
     fi
 
     say "Java / Spring Boot - OK"
@@ -887,7 +832,7 @@ PY
 run_python() {
   CURRENT_MODULE="python"
   record_summary python status RUNNING
-  record_summary python security "pip-audit=$( is_push && echo on || echo off )"
+  record_summary python security "pip-audit=on"
 
   say "Python / Django - quality, tests, coverage, security"
 
@@ -901,9 +846,9 @@ run_python() {
     cd "$ROOT_DIR/python-django"
 
     local venv_dir=".venv-ci"
-    local cleanup_venv="${CI_LOCAL_CLEAN_VENV:-1}"
+    local cleanup_venv="${PY_CLEAN_VENV_DEFAULT}"
 
-    say "Setup - create isolated venv for CI tools (pip-tools)"
+    say "Setup - create isolated venv + install pip-tools"
     rm -rf "$venv_dir"
     python3.12 -m venv "$venv_dir"
 
@@ -941,21 +886,10 @@ run_python() {
     say "Quality - lint (ruff)"
     ruff check .
 
-    if is_pr; then
-      say "Quality - typecheck (mypy) (PR only, non-blocking)"
-      set +e
-      mypy app
-      local mypy_rc=$?
-      set -e
-      if [[ $mypy_rc -ne 0 ]]; then
-        echo "NOTE: mypy failed but is non-blocking for pull_request (matches CI)."
-      fi
-    else
-      say "Quality - typecheck (mypy) (push/tags only, blocking)"
-      mypy app
-    fi
+    say "Quality - typecheck (mypy)"
+    mypy app
 
-    say "Test - unit tests + coverage (pytest, enforce 100%%, write XML)"
+    say "Test - unit tests + coverage (pytest, enforce 100%, write XML)"
     DJANGO_SETTINGS_MODULE=django_app.settings \
       pytest --cov --cov-report=xml --cov-fail-under=100
 
@@ -974,18 +908,14 @@ PY
     [[ -n "$py_cov" ]] || die "could not parse Python coverage percent" 2
     record_summary python coverage "$py_cov"
 
-    if is_push; then
-      say "Security - vulnerability scan (pip-audit) (push/tags only)"
-      python -m pip install "pip-audit==${PIP_AUDIT_VERSION}"
-      pip-audit -r requirements.lock --format=json --output=pip-audit.json
-      pip-audit -r requirements.lock
+    say "Security - vulnerability scan (pip-audit)"
+    python -m pip install "pip-audit==${PIP_AUDIT_VERSION}"
+    pip-audit -r requirements.lock --format=json --output=pip-audit.json
+    pip-audit -r requirements.lock
 
-      say "Artifact - pip-audit report"
-      [[ -f pip-audit.json ]] || warn "pip-audit.json not found."
-      copy_artifact "pip-audit.json" "$ARTIFACTS_PY_DIR" "pip-audit.json"
-    else
-      say "Security - vulnerability scan (pip-audit) (push/tags only) [skipped: CI_EVENT_NAME=$CI_EVENT_NAME]"
-    fi
+    say "Artifact - pip-audit report"
+    [[ -f pip-audit.json ]] || warn "pip-audit.json not found."
+    copy_artifact "pip-audit.json" "$ARTIFACTS_PY_DIR" "pip-audit.json"
 
     say "Python / Django - OK"
   )
@@ -1001,7 +931,7 @@ PY
 docker_has_buildx() { docker buildx version >/dev/null 2>&1; }
 
 ensure_buildx_builder() {
-  local name="${CI_DOCKER_BUILDX_BUILDER:-ci-local}"
+  local name="ci-local"
   if ! docker buildx inspect "$name" >/dev/null 2>&1; then
     docker buildx create --name "$name" --driver docker-container --use >/dev/null
   else
@@ -1015,8 +945,8 @@ docker_build_image() {
   local context="$2"
   shift 2
 
-  local use_buildx="${CI_DOCKER_USE_BUILDX:-1}"
-  local pull="${CI_DOCKER_PULL_BASE:-1}"
+  local use_buildx="${DOCKER_USE_BUILDX_DEFAULT}"
+  local pull="${DOCKER_PULL_BASE_DEFAULT}"
 
   local -a base_args=()
   [[ "$pull" == "1" ]] && base_args+=(--pull)
@@ -1163,7 +1093,7 @@ run_trivy_repo() {
   record_summary trivy_repo coverage "-"
   record_summary trivy_repo security "trivy_repo=on"
 
-  say "Security - Trivy (repo fs) + SARIF (local)"
+  say "Security - Trivy (repo) + SARIF"
 
   require_env TRIVY_VERSION
   need_cmd docker
@@ -1177,14 +1107,13 @@ run_trivy_repo() {
 
   ensure_dir "$ARTIFACTS_TRIVY_DIR"
 
-  local scanners="${CI_TRIVY_SCANNERS:-vuln,misconfig,secret}"
-  local severity="${CI_TRIVY_SEVERITY:-HIGH,CRITICAL}"
+  local scanners="${TRIVY_SCANNERS_DEFAULT}"
+  local severity="${TRIVY_SEVERITY_DEFAULT}"
+  local timeout="${TRIVY_TIMEOUT_DEFAULT}"
+  local scan_retries="${TRIVY_SCAN_RETRIES_DEFAULT}"
 
   local sev_label
   sev_label="$(printf '%s' "$severity" | tr ',' '/')"
-
-  local timeout="${CI_TRIVY_TIMEOUT:-10m0s}"
-  local scan_retries="${CI_TRIVY_SCAN_RETRIES:-2}"
 
   local trivy_cache_dir="${ROOT_DIR}/.cache/trivy"
   ensure_dir "$trivy_cache_dir"
@@ -1201,7 +1130,7 @@ run_trivy_repo() {
     }
   fi
 
-  say "Security - Trivy fs scan (repo) [${severity}]"
+  say "Security - Trivy scan (fs) (table, gate HIGH/CRITICAL)"
   if ! retry "$scan_retries" trivy_fs_scan_table_gate \
       "$trivy_img" "$trivy_cache_dir" "$trivy_cache_mount" \
       "$scanners" "$severity" "$timeout"; then
@@ -1212,6 +1141,7 @@ run_trivy_repo() {
 
   record_summary trivy_repo coverage "PASS(${sev_label})"
 
+  say "Security - Trivy scan (fs) -> SARIF"
   if ! retry "$scan_retries" trivy_fs_scan_sarif \
       "$trivy_img" "$trivy_cache_dir" "$trivy_cache_mount" \
       "$scanners" "$severity" "$timeout"; then
@@ -1228,7 +1158,7 @@ run_docker() {
   record_summary docker coverage "-"
   record_summary docker security "trivy_image=on"
 
-  say "Docker - build + Trivy image scan + SARIF (local)"
+  say "Docker - build + Trivy image scan + SARIF"
 
   require_env TRIVY_VERSION
   need_cmd docker
@@ -1241,22 +1171,11 @@ run_docker() {
 
   ensure_dir "$ARTIFACTS_TRIVY_DIR"
 
-  local release_mode="${CI_RELEASE_MODE:-0}"
-  local run_tests="${CI_DOCKER_RUN_TESTS:-false}"
-  local version_arg=""
-  local tag=""
-
-  if [[ "$release_mode" == "1" ]]; then
-    require_env CI_TAG_NAME
-    run_tests="true"
-    version_arg="${CI_TAG_NAME#v}"
-    tag="${version_arg}"
-  else
-    local rev
-    rev="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-    tag="${CI_IMAGE_VERSION:-${rev}}"
-    version_arg="${tag}"
-  fi
+  local run_tests="false"
+  local rev
+  rev="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  local tag="${rev}"
+  local version_arg="${rev}"
 
   local build_time
   build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -1264,15 +1183,15 @@ run_docker() {
   local rev_full
   rev_full="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
-  local scanners="${CI_TRIVY_SCANNERS:-vuln,misconfig,secret}"
-  local severity="${CI_TRIVY_SEVERITY:-HIGH,CRITICAL}"
-  local timeout="${CI_TRIVY_TIMEOUT:-10m0s}"
+  local scanners="${TRIVY_SCANNERS_DEFAULT}"
+  local severity="${TRIVY_SEVERITY_DEFAULT}"
+  local timeout="${TRIVY_TIMEOUT_DEFAULT}"
 
   local sev_label
   sev_label="$(printf '%s' "$severity" | tr ',' '/')"
 
-  local build_retries="${CI_DOCKER_BUILD_RETRIES:-2}"
-  local scan_retries="${CI_TRIVY_SCAN_RETRIES:-2}"
+  local build_retries="${DOCKER_BUILD_RETRIES_DEFAULT}"
+  local scan_retries="${TRIVY_SCAN_RETRIES_DEFAULT}"
 
   local trivy_cache_dir="${ROOT_DIR}/.cache/trivy"
   ensure_dir "$trivy_cache_dir"
@@ -1300,7 +1219,7 @@ run_docker() {
       --build-arg "OCI_IMAGE_REVISION=${rev_full}" \
       || die "docker build failed for ${image_ref}" 2
 
-    say "Scan - Trivy image (${image_ref}) [${severity}]"
+    say "Scan - Trivy image (${image_ref}) (table, gate HIGH/CRITICAL)"
     local out_txt="${ARTIFACTS_TRIVY_DIR}/trivy-image-${image}.txt"
     local out_sarif="${ARTIFACTS_TRIVY_DIR}/trivy-image-${image}.sarif"
 
@@ -1308,6 +1227,7 @@ run_docker() {
       die "trivy image scan found ${severity} issues (gating) for ${image_ref}" 1
     fi
 
+    say "Trivy - scan image -> SARIF"
     if ! retry "$scan_retries" trivy_image_scan_sarif "$trivy_img" "$trivy_cache_dir" "$trivy_cache_mount" "$scanners" "$severity" "$timeout" "$image_ref" "$out_sarif"; then
       warn "trivy image sarif generation failed for ${image_ref} (non-gating)."
     fi
@@ -1323,28 +1243,18 @@ run_docker() {
 }
 
 # ------------------------------------------------------------------------------
-# CLI: usage + main
+# CLI flags
 # ------------------------------------------------------------------------------
 
 usage() {
   cat <<'TXT'
-ci-local: run local parity checks for .github/workflows/ci.yaml
+ci-local: run local checks
 
 USAGE
   ./.ci-local.sh [command] [--help]
 
-QUICK START
-  # Mainline parity (default): policy (PR only) + trivy repo + tests/builds
-  ./.ci-local.sh
-
-  # Simulate a PR run
-  CI_EVENT_NAME=pull_request ./.ci-local.sh
-
-  # Weekly parity (schedule): repo scan + docker build + image scan
-  CI_EVENT_NAME=schedule ./.ci-local.sh
-
 COMMANDS
-  all         Run the default parity flow (same as CI mainline).
+  all         Run the default flow: trivy_repo + go + java + python
   trivy_repo  Scan the repository filesystem with Trivy (table gate + SARIF).
   go          Run Go (golang-gin) checks only.
   java        Run Java (java-springboot) checks only.
@@ -1352,54 +1262,20 @@ COMMANDS
   docker      Build images + Trivy image scans (table gate + SARIF).
   doctor      Preflight checks (doctor [all|go|java|python|docker] [--summary]).
 
-HOW CI_EVENT_NAME CHANGES BEHAVIOR
-  push          Runs: policy_check (skipped) + trivy_repo + go + java + python
-  pull_request  Runs: policy_check (enabled) + trivy_repo + go + java + python
-  schedule      Runs: trivy_repo + docker (weekly parity), skips go/java/python
-
-COMMON OPTIONS / ENV
-  Logging:
-    LOG_LEVEL=quiet|info|debug             (default: info)
-
-  CI mode simulation:
-    CI_EVENT_NAME=push|pull_request|schedule (default: push)
-    CI_ACTOR=<name>                          (PR policy parity; default: $USER)
-    CI_PR_BASE_REF=origin/main|origin/master (PR policy parity; auto-detect if unset)
-
-  Python:
-    CI_LOCAL_CLEAN_VENV=1|0                 (default: 1)
-
-  Docker build:
-    CI_IMAGE_VERSION=<tag>                  (default: git sha)
-    CI_DOCKER_RUN_TESTS=true|false          (default: false)
-    CI_DOCKER_USE_BUILDX=1|0                (default: 1)
-    CI_DOCKER_PULL_BASE=1|0                 (default: 1)
-    CI_DOCKER_BUILD_RETRIES=<n>             (default: 2)
-
-  Trivy (repo + image):
-    CI_TRIVY_SCANNERS=vuln,misconfig,secret (default: vuln,misconfig,secret)
-    CI_TRIVY_SEVERITY=HIGH,CRITICAL         (default: HIGH,CRITICAL)
-    CI_TRIVY_TIMEOUT=10m0s                  (default: 10m0s)
-    CI_TRIVY_SCAN_RETRIES=<n>               (default: 2)
-
-  Release/tag simulation:
-    CI_RELEASE_MODE=1                       (forces RUN_TESTS=true; VERSION from CI_TAG_NAME)
-    CI_TAG_NAME=vX.Y.Z                      (required when CI_RELEASE_MODE=1)
-
-  Security data:
-    NVD_API_KEY                             (needed for OWASP Dependency-Check on push/tags)
+ENV
+  LOG_LEVEL=quiet|info|debug  (default: info)
+  NVD_API_KEY                 (optional; enables live OWASP Dependency-Check updates)
 
 ARTIFACT OUTPUT
   .cache/ci-local/artifacts/
 
 EXAMPLES
+  ./.ci-local.sh
   ./.ci-local.sh all
   ./.ci-local.sh trivy_repo
   ./.ci-local.sh go
   ./.ci-local.sh doctor all --summary
-  CI_EVENT_NAME=pull_request CI_ACTOR=someone ./.ci-local.sh
-  CI_EVENT_NAME=schedule ./.ci-local.sh
-  CI_RELEASE_MODE=1 CI_TAG_NAME=v1.2.3 ./.ci-local.sh docker
+  LOG_LEVEL=debug ./.ci-local.sh
 TXT
 }
 
@@ -1410,15 +1286,10 @@ main() {
   case "$target" in
     all)
       init_summary
-      policy_check
       run_trivy_repo
-      if is_schedule; then
-        run_docker
-      else
-        run_go
-        run_java
-        run_python
-      fi
+      run_go
+      run_java
+      run_python
       ;;
     trivy_repo)
       init_summary
@@ -1426,17 +1297,14 @@ main() {
       ;;
     go)
       init_summary
-      policy_check
       run_go
       ;;
     java)
       init_summary
-      policy_check
       run_java
       ;;
     python)
       init_summary
-      policy_check
       run_python
       ;;
     docker)
