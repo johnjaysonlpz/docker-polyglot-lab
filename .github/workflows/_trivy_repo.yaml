@@ -1,4 +1,3 @@
-# .github/workflows/_trivy_repo.yaml
 name: _security_trivy_repo
 
 on:

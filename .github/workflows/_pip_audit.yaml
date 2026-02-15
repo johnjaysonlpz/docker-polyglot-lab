@@ -1,4 +1,3 @@
-# .github/workflows/_pip_audit.yaml
 name: _security_pip_audit
 
 on:

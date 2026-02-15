@@ -1,4 +1,3 @@
-# .github/workflows/_govulncheck.yaml
 name: _security_govulncheck
 
 on:

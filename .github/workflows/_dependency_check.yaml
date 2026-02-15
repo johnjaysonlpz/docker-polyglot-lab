@@ -1,4 +1,3 @@
-# .github/workflows/_dependency_check.yaml
 name: _security_dependency_check
 
 on:

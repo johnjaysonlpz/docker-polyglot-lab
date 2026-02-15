@@ -1,4 +1,3 @@
-# .github/workflows/_trivy_image.yaml
 name: _security_trivy_image
 
 on:

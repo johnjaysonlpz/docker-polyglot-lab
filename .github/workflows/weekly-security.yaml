@@ -1,4 +1,3 @@
-# .github/workflows/weekly-security.yaml
 name: Weekly Security
 
 on:

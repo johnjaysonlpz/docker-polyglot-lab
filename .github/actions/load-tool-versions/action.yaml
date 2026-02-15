@@ -1,4 +1,3 @@
-# .github/actions/load-tool-versions/action.yaml
 name: Load tool versions
 description: Export .ci-tool-versions.sh KEY=VALUE lines into GITHUB_ENV (strict + allowlist + per-key validation + optional quoting)
 
