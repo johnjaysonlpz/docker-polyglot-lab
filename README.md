@@ -452,14 +452,38 @@ export TELEGRAM_CHAT_ID='...'
 
 ## CI
 
-### GitHub Actions workflow
+### GitHub Actions workflows
 
-The workflow runs on pushes, PRs, and tags; it enforces formatting, linting, tests, coverage expectations, and security scanning. It also builds app images and pushes them to a registry on release tags.
+This repo uses GitHub Actions for **quality gates** (format/lint/tests/coverage) and **security scanning**.
 
-See: [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) (workflow) and [`.github/actions/`](.github/actions/) (shared composite steps).
+- **Main CI**: runs on **pushes**, **PRs**, and **release tags**.
+  - On **release tags** (`v*`), CI also builds images, scans them, and pushes/promotes them to Docker Hub.
+- **Weekly Security**: runs on a schedule (and can be triggered manually) to execute security scans regularly.
+
+See:
+- [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) (main CI)
+- [`.github/workflows/weekly-security.yaml`](.github/workflows/weekly-security.yaml) (scheduled security)
+- [`.github/actions/`](.github/actions/) (shared composite actions)
 
 > [!NOTE]
 > GitHub Actions only discovers workflows from **`.github/workflows/`**. If you’re viewing this project from an archive that strips dot-directories, double-check the repo still contains `.github/workflows` when pushed to GitHub.
+
+### CI policy protections (PRs)
+
+To protect the integrity of CI itself, PRs that modify **CI control files** are **blocked** unless the PR author is listed in `CI_MAINTAINERS` (configured in `ci.yaml`).
+
+Protected paths include:
+
+- `.github/workflows/`
+- `.github/actions/`
+- `.ci-tool-versions.sh`
+- `.ci-local.sh`
+- `.bootstrap-local.sh`
+
+This guard is designed to be **fork-safe** and **fail-closed**: if the workflow cannot reliably compute the PR diff, it fails.
+
+> [!NOTE]
+> Some security features are constrained on **fork PRs** due to GitHub permission rules (for example, uploading SARIF to Code Scanning may be skipped/blocked depending on the workflow inputs and PR source).
 
 ### Local checks: `.ci-local.sh`
 
@@ -467,7 +491,7 @@ See: [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) (workflow) and [`.
 > `.ci-local.sh` is a **local checker** that runs a **fixed set of high-signal gates** (format/lint/test/coverage/security).
 > It **does not simulate CI events** (push/PR/schedule) and does not attempt to match GitHub Actions runtime details
 > (caching, SARIF upload, dependency review, release/tag behavior, etc.).  
-> The GitHub workflow (`.github/workflows/ci.yaml`) remains the source of truth for CI-only behavior.
+> The GitHub workflows remain the source of truth for CI-only behavior.
 
 ```bash
 ./.ci-local.sh --help                       # or: -h
@@ -490,11 +514,12 @@ Tool pins live in: [`.ci-tool-versions.sh`](.ci-tool-versions.sh) — the **sing
 | [`golang-gin/`](golang-gin/README.md) | Go + Gin service |
 | [`java-springboot/`](java-springboot/README.md) | Spring Boot service |
 | [`python-django/`](python-django/README.md) | Django service |
-| [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) | CI workflow |
-| [`.github/actions/load-tool-versions/`](.github/actions/load-tool-versions/) | Composite action: loads `.ci-tool-versions.sh` into `GITHUB_ENV` |
+| [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) | Main CI workflow (quality gates + security + release tag builds/push) |
+| [`.github/workflows/weekly-security.yaml`](.github/workflows/weekly-security.yaml) | Scheduled security workflows (weekly scans + manual trigger) |
+| [`.github/actions/load-tool-versions/`](.github/actions/load-tool-versions/) | Composite action: loads `.ci-tool-versions.sh` into `GITHUB_ENV` (strict allowlist + per-key validation) |
 | [`.bootstrap-local.sh`](.bootstrap-local.sh) | Local bootstrap for secrets + permissions |
 | [`.ci-local.sh`](.ci-local.sh) | Local CI runner |
-| [`.ci-tool-versions.sh`](.ci-tool-versions.sh) | Tool/version pins (**single source of truth**) consumed by **`.ci-local.sh`** and **`.github/workflows/ci.yaml`** |
+| [`.ci-tool-versions.sh`](.ci-tool-versions.sh) | Tool/version pins (**single source of truth**) consumed by **`.ci-local.sh`** and GitHub Actions |
 | [`.gitignore`](.gitignore) | Secret hygiene + build artifact ignores |
 
 ---
