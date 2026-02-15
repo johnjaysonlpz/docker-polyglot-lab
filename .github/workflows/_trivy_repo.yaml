@@ -64,7 +64,7 @@ jobs:
 
       - name: Security - Trivy scan (fs) (table)
         id: trivy_repo_table
-        continue-on-error: ${{ inputs.gate_on_findings }}
+        continue-on-error: true
         uses: aquasecurity/trivy-action@0.33.1
         with:
           version: ${{ env.TRIVY_VERSION }}
@@ -76,7 +76,7 @@ jobs:
           ignore-unfixed: true
           format: table
           output: trivy-repo.txt
-          exit-code: "1"
+          exit-code: ${{ inputs.gate_on_findings && '1' || '0' }}
           skip-dirs: .git,.cache
 
       - name: Security - Trivy scan (fs) -> SARIF
