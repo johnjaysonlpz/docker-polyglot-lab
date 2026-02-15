@@ -1,0 +1,97 @@
+name: _security_dependency_check
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        type: string
+        required: true
+      gate:
+        type: boolean
+        required: true
+      artifact_name:
+        type: string
+        required: false
+        default: java-springboot-dependency-check
+    secrets:
+      NVD_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  dependency_check:
+    name: Security - OWASP Dependency-Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    env:
+      DEPENDENCY_CHECK_MAVEN_VERSION: ""
+      DEPENDENCY_CHECK_FAIL_CVSS: ""
+      ODC_DATA_DIR: "${{ github.workspace }}/.cache/dependency-check"
+      ODC_CACHE_EPOCH: "unset"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
+
+      - name: Validate - tool versions loaded
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${DEPENDENCY_CHECK_MAVEN_VERSION:?DEPENDENCY_CHECK_MAVEN_VERSION is empty}"
+          : "${DEPENDENCY_CHECK_FAIL_CVSS:?DEPENDENCY_CHECK_FAIL_CVSS is empty}"
+
+      - name: Setup - JDK 25 (Temurin)
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Compute cache epoch (weekly)
+        shell: bash
+        run: echo "ODC_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
+
+      - name: Cache - OWASP Dependency-Check data
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.ODC_DATA_DIR }}
+          key: dependency-check-${{ runner.os }}-${{ env.DEPENDENCY_CHECK_MAVEN_VERSION }}-${{ env.ODC_CACHE_EPOCH }}
+          restore-keys: |
+            dependency-check-${{ runner.os }}-${{ env.DEPENDENCY_CHECK_MAVEN_VERSION }}-
+
+      - name: Security - OWASP Dependency-Check scan
+        id: depcheck
+        continue-on-error: ${{ !inputs.gate }}
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          mvn -B -ntp org.owasp:dependency-check-maven:${DEPENDENCY_CHECK_MAVEN_VERSION}:check \
+            -DfailBuildOnCVSS=${DEPENDENCY_CHECK_FAIL_CVSS} \
+            -Dformats=HTML,JSON \
+            -DdataDirectory="${ODC_DATA_DIR}" \
+            -DnvdApiKeyEnvironmentVariable=NVD_API_KEY
+
+      - name: Artifact - upload Dependency-Check reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: |
+            ${{ inputs.working_directory }}/target/dependency-check-report.html
+            ${{ inputs.working_directory }}/target/dependency-check-report.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Gate - fail if Dependency-Check found issues
+        if: ${{ inputs.gate && steps.depcheck.outcome == 'failure' }}
+        shell: bash
+        run: exit 1

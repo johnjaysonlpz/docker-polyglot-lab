@@ -1,0 +1,98 @@
+name: _security_govulncheck
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        type: string
+        required: true
+      gate:
+        type: boolean
+        required: true
+      artifact_name:
+        type: string
+        required: false
+        default: go-gin-govulncheck
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: Security - govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    env:
+      GOVULNCHECK_VERSION: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
+
+      - name: Validate - tool versions loaded
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${GOVULNCHECK_VERSION:?GOVULNCHECK_VERSION is empty}"
+
+      - name: Setup - Go toolchain
+        id: go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ inputs.working_directory }}/go.mod
+          cache-dependency-path: ${{ inputs.working_directory }}/go.sum
+          check-latest: false
+
+      - name: Cache - Go tools (govulncheck)
+        id: cache_go_tools
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/bin
+          key: go-tools-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ env.GOVULNCHECK_VERSION }}
+
+      - name: Setup - install govulncheck (cache miss)
+        if: steps.cache_go_tools.outputs.cache-hit != 'true'
+        shell: bash
+        run: go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+
+      - name: Setup - add Go tools to PATH
+        shell: bash
+        run: |
+          GOBIN="$(go env GOBIN)"
+          if [[ -z "$GOBIN" ]]; then
+            GOPATH_FIRST="$(go env GOPATH)"
+            GOPATH_FIRST="${GOPATH_FIRST%%:*}"
+            GOBIN="${GOPATH_FIRST}/bin"
+          fi
+          echo "$GOBIN" >> "$GITHUB_PATH"
+          command -v govulncheck
+
+      - name: Security - govulncheck (with tests)
+        id: govuln
+        continue-on-error: ${{ !inputs.gate }}
+        shell: bash
+        run: |
+          set -o pipefail
+          govulncheck -test ./... | tee govulncheck.txt
+
+      - name: Artifact - upload govulncheck report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.working_directory }}/govulncheck.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Gate - fail if govulncheck found issues
+        if: ${{ inputs.gate && steps.govuln.outcome == 'failure' }}
+        shell: bash
+        run: exit 1

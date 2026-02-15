@@ -32,12 +32,12 @@
 
     <bytebuddy.agent.version>1.18.4</bytebuddy.agent.version>
 
-    <jacoco.min.instruction.covered.ratio>1.0</jacoco.min.instruction.covered.ratio>
-    <jacoco.min.branch.covered.ratio>1.0</jacoco.min.branch.covered.ratio>
-    <jacoco.min.line.covered.ratio>1.0</jacoco.min.line.covered.ratio>
-    <jacoco.min.complexity.covered.ratio>1.0</jacoco.min.complexity.covered.ratio>
-    <jacoco.min.method.covered.ratio>1.0</jacoco.min.method.covered.ratio>
-    <jacoco.min.class.covered.ratio>1.0</jacoco.min.class.covered.ratio>
+    <jacoco.min.instruction.covered.ratio>${jacoco.min.ratio}</jacoco.min.instruction.covered.ratio>
+    <jacoco.min.branch.covered.ratio>${jacoco.min.ratio}</jacoco.min.branch.covered.ratio>
+    <jacoco.min.line.covered.ratio>${jacoco.min.ratio}</jacoco.min.line.covered.ratio>
+    <jacoco.min.complexity.covered.ratio>${jacoco.min.ratio}</jacoco.min.complexity.covered.ratio>
+    <jacoco.min.method.covered.ratio>${jacoco.min.ratio}</jacoco.min.method.covered.ratio>
+    <jacoco.min.class.covered.ratio>${jacoco.min.ratio}</jacoco.min.class.covered.ratio>
   </properties>
 
   <dependencies>

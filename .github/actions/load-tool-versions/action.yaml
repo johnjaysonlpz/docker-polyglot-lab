@@ -1,5 +1,5 @@
 name: Load tool versions
-description: Export .ci-tool-versions.sh KEY=VALUE lines into GITHUB_ENV (strict)
+description: Export .ci-tool-versions.sh KEY=VALUE lines into GITHUB_ENV (strict + allowlist + per-key validation + optional quoting)
 
 runs:
   using: composite
@@ -11,17 +11,84 @@ runs:
         file=".ci-tool-versions.sh"
         [[ -f "$file" ]] || { echo "ERROR: missing $file" >&2; exit 2; }
 
+        allowed_keys_re='^(TRIVY_VERSION|GOIMPORTS_VERSION|GOVULNCHECK_VERSION|GOLANGCI_LINT_VERSION|GO_MODULE|DEPENDENCY_CHECK_MAVEN_VERSION|DEPENDENCY_CHECK_FAIL_CVSS|PIP_AUDIT_VERSION|PIP_TOOLS_VERSION|PIP_MAX_VERSION)$'
+
+        base_value_re='[A-Za-z0-9][A-Za-z0-9._+/:@-]*'
+
+        unquoted_line_re="^([A-Z][A-Z0-9_]*)=(${base_value_re})$"
+        quoted_line_re="^([A-Z][A-Z0-9_]*)=\"(${base_value_re})\"$"
+        semverish_re='^v?[0-9]+(\.[0-9]+){0,3}([.-][0-9A-Za-z][0-9A-Za-z.-]*)?(\+[0-9A-Za-z][0-9A-Za-z.-]*)?$'
+
+        numeric_version_re='^[0-9]+(\.[0-9]+){0,3}$'
+        cvss_re='^(10(\.0)?|[0-9](\.[0-9])?)$'
+
+        go_module_re='^[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+$'
+
+        declare -A key_value_re=(
+          ["TRIVY_VERSION"]="$semverish_re"
+          ["GOIMPORTS_VERSION"]="$semverish_re"
+          ["GOVULNCHECK_VERSION"]="$semverish_re"
+          ["GOLANGCI_LINT_VERSION"]="$semverish_re"
+          ["DEPENDENCY_CHECK_MAVEN_VERSION"]="$semverish_re"
+          ["PIP_AUDIT_VERSION"]="$semverish_re"
+          ["PIP_TOOLS_VERSION"]="$semverish_re"
+          ["PIP_MAX_VERSION"]="$numeric_version_re"
+          ["DEPENDENCY_CHECK_FAIL_CVSS"]="$cvss_re"
+          ["GO_MODULE"]="$go_module_re"
+        )
+
+        trim() {
+          local s="$1"
+          s="${s#"${s%%[![:space:]]*}"}"
+          s="${s%"${s##*[![:space:]]}"}"
+          printf '%s' "$s"
+        }
+
+        fail_line() {
+          local msg="$1" raw="$2"
+          echo "ERROR: $msg" >&2
+          printf '  %q\n' "$raw" >&2
+          exit 2
+        }
+
         while IFS= read -r raw || [[ -n "$raw" ]]; do
           line="${raw%$'\r'}"
+          line="$(trim "$line")"
 
           [[ -z "$line" ]] && continue
           [[ "$line" =~ ^# ]] && continue
 
-          if [[ "$line" =~ ^[A-Z][A-Z0-9_]*=[A-Za-z0-9._+/-]+$ ]]; then
-            echo "$line" >> "$GITHUB_ENV"
+          key=""
+          value=""
+
+          if [[ "$line" =~ $unquoted_line_re ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+          elif [[ "$line" =~ $quoted_line_re ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
           else
-            echo "ERROR: invalid line in $file (must be KEY=VALUE; value limited to [A-Za-z0-9._+-]):" >&2
-            printf '  %q\n' "$raw" >&2
+            fail_line "invalid line in $file (must be KEY=value or KEY=\"value\"; no spaces; KEY=[A-Z][A-Z0-9_]*; value charset=${base_value_re})" "$raw"
+          fi
+
+          if [[ ! "$key" =~ $allowed_keys_re ]]; then
+            echo "ERROR: disallowed key in $file: $key" >&2
+            echo "Allowed keys must match: $allowed_keys_re" >&2
             exit 2
           fi
+
+          expected_re="${key_value_re[$key]:-}"
+          if [[ -z "$expected_re" ]]; then
+            echo "ERROR: internal config missing per-key validator for: $key" >&2
+            exit 2
+          fi
+
+          if [[ ! "$value" =~ $expected_re ]]; then
+            echo "ERROR: invalid value for $key in $file" >&2
+            echo "Expected regex: $expected_re" >&2
+            printf '  got: %q\n' "$value" >&2
+            exit 2
+          fi
+
+          echo "${key}=${value}" >> "$GITHUB_ENV"
         done < "$file"

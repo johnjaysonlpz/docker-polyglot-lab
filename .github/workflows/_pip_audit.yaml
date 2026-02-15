@@ -1,0 +1,85 @@
+name: _security_pip_audit
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        type: string
+        required: true
+      gate:
+        type: boolean
+        required: true
+      artifact_name:
+        type: string
+        required: false
+        default: python-django-pip-audit
+
+permissions:
+  contents: read
+
+jobs:
+  pip_audit:
+    name: Security - pip-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    env:
+      PIP_AUDIT_VERSION: ""
+      PIP_MAX_VERSION: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
+
+      - name: Validate - tool versions loaded
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${PIP_AUDIT_VERSION:?PIP_AUDIT_VERSION is empty}"
+          : "${PIP_MAX_VERSION:?PIP_MAX_VERSION is empty}"
+          test -f requirements.lock
+
+      - name: Setup - Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            ${{ inputs.working_directory }}/requirements.lock
+
+      - name: Setup - venv + install pip-audit
+        shell: bash
+        run: |
+          python -m venv .venv-audit
+          . .venv-audit/bin/activate
+          python -m pip install -U "pip<${PIP_MAX_VERSION}"
+          python -m pip install "pip-audit==${PIP_AUDIT_VERSION}"
+
+      - name: Security - pip-audit (locked deps)
+        id: audit
+        continue-on-error: ${{ !inputs.gate }}
+        shell: bash
+        run: |
+          . .venv-audit/bin/activate
+          pip-audit -r requirements.lock --format=json --output=pip-audit.json
+          pip-audit -r requirements.lock
+
+      - name: Artifact - upload pip-audit report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.working_directory }}/pip-audit.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Gate - fail if pip-audit found issues
+        if: ${{ inputs.gate && steps.audit.outcome == 'failure' }}
+        shell: bash
+        run: exit 1

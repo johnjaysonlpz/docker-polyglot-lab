@@ -52,6 +52,10 @@ ODC_NVD_API_DELAY_MS_DEFAULT=3500
 ODC_NVD_MAX_RETRY_COUNT_DEFAULT=10
 ODC_NVD_VALID_FOR_HOURS_DEFAULT=24
 
+GO_COVERAGE_MIN="${GO_COVERAGE_MIN:-100}"
+PY_COVERAGE_MIN="${PY_COVERAGE_MIN:-100}"
+JAVA_COVERAGE_MIN_RATIO="${JAVA_COVERAGE_MIN_RATIO:-1.0}"
+
 # ------------------------------------------------------------------------------
 # Repo root + global paths
 # ------------------------------------------------------------------------------
@@ -653,17 +657,18 @@ run_go() {
     CGO_ENABLED=1 go test ./... -race -shuffle=on -count=1 \
       -covermode=atomic -coverprofile=coverage.out
 
-    say "Coverage - enforce 100% statements (Go)"
+    say "Coverage - enforce minimum statements (Go) (min=${GO_COVERAGE_MIN}%)"
     python3.12 - <<'PY'
-import re, subprocess, sys
+import os, re, subprocess, sys
 out = subprocess.check_output(["go", "tool", "cover", "-func=coverage.out"], text=True)
 m = re.search(r"total:\s*\(statements\)\s*([\d.]+)%", out)
 if not m:
     print("Could not parse total coverage from go tool cover output.", file=sys.stderr)
     sys.exit(2)
 pct = float(m.group(1))
-print(f"Go total coverage: {pct:.1f}%")
-sys.exit(0 if pct >= 100.0 else 1)
+min_pct = float(os.environ.get("GO_COVERAGE_MIN", "100"))
+print(f"Go total coverage: {pct:.1f}% (min {min_pct:.1f}%)")
+sys.exit(0 if pct >= min_pct else 1)
 PY
 
     local go_cov
@@ -709,8 +714,8 @@ run_java() {
     cd "$ROOT_DIR/java-springboot"
     export MAVEN_OPTS="${MAVEN_OPTS:---sun-misc-unsafe-memory-access=allow}"
 
-    say "Build - verify (Spotless, SpotBugs, tests, JaCoCo)"
-    mvn -B -ntp verify
+    say "Build - verify (Spotless, SpotBugs, tests, JaCoCo) (jacoco.min.ratio=${JAVA_COVERAGE_MIN_RATIO})"
+    mvn -B -ntp verify -Djacoco.min.ratio="${JAVA_COVERAGE_MIN_RATIO}"
 
     say "Artifact - JaCoCo report"
     [[ -d target/site/jacoco ]] || die "target/site/jacoco/ not found (JaCoCo expected from mvn verify)." 2
@@ -889,9 +894,9 @@ run_python() {
     say "Quality - typecheck (mypy)"
     mypy app
 
-    say "Test - unit tests + coverage (pytest, enforce 100%, write XML)"
+    say "Test - unit tests + coverage (pytest, enforce min, write XML) (min=${PY_COVERAGE_MIN}%)"
     DJANGO_SETTINGS_MODULE=django_app.settings \
-      pytest --cov --cov-report=xml --cov-fail-under=100
+      pytest --cov --cov-report=xml --cov-fail-under="${PY_COVERAGE_MIN}"
 
     say "Artifact - coverage report (coverage.xml)"
     test -f coverage.xml
@@ -1264,6 +1269,9 @@ COMMANDS
 
 ENV
   LOG_LEVEL=quiet|info|debug  (default: info)
+  GO_COVERAGE_MIN             (default: 100) percent
+  PY_COVERAGE_MIN             (default: 100) percent
+  JAVA_COVERAGE_MIN_RATIO     (default: 1.0) ratio (0.0-1.0)
   NVD_API_KEY                 (optional; enables live OWASP Dependency-Check updates)
 
 ARTIFACT OUTPUT

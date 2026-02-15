@@ -1,0 +1,126 @@
+name: _security_trivy_repo
+
+on:
+  workflow_call:
+    inputs:
+      upload_sarif:
+        type: boolean
+        required: true
+      gate_on_findings:
+        type: boolean
+        required: true
+      allow_fork_pr_sarif:
+        type: boolean
+        required: true
+      artifact_name:
+        type: string
+        required: false
+        default: trivy-repo
+      sarif_category:
+        type: string
+        required: false
+        default: trivy-repo
+
+permissions:
+  contents: read
+
+jobs:
+  trivy_repo:
+    name: Security - Trivy (repo) + SARIF
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      TRIVY_VERSION: ""
+      TRIVY_CACHE_EPOCH: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup - load pinned tool versions
+        uses: ./.github/actions/load-tool-versions
+
+      - name: Validate - tool versions loaded
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          : "${TRIVY_VERSION:?TRIVY_VERSION is empty (load-tool-versions failed?)}"
+
+      - name: Compute - Trivy cache epoch (weekly)
+        shell: bash
+        run: echo "TRIVY_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
+
+      - name: Cache - Trivy DB/cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: trivy-${{ runner.os }}-${{ env.TRIVY_VERSION }}-${{ env.TRIVY_CACHE_EPOCH }}
+          restore-keys: |
+            trivy-${{ runner.os }}-${{ env.TRIVY_VERSION }}-
+
+      - name: Security - Trivy scan (fs) (table)
+        id: trivy_repo_table
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          output: trivy-repo.txt
+          exit-code: ${{ inputs.gate_on_findings && '1' || '0' }}
+          skip-dirs: .git,.cache
+
+      - name: Security - Trivy scan (fs) -> SARIF
+        if: ${{ inputs.upload_sarif && always() }}
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-repo.sarif
+          exit-code: "0"
+          skip-dirs: .git,.cache
+
+      - name: Upload - SARIF to GitHub Code Scanning (repo)
+        if: >-
+          ${{
+            inputs.upload_sarif &&
+            always() &&
+            (
+              github.event_name != 'pull_request' ||
+              inputs.allow_fork_pr_sarif ||
+              github.event.pull_request.head.repo.full_name == github.repository
+            )
+          }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-repo.sarif
+          category: ${{ inputs.sarif_category }}
+
+      - name: Artifact - upload Trivy repo report (table)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: trivy-repo.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Gate - fail if Trivy repo scan found HIGH/CRITICAL
+        if: ${{ inputs.gate_on_findings && steps.trivy_repo_table.outcome == 'failure' }}
+        shell: bash
+        run: exit 1

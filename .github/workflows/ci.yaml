@@ -17,6 +17,9 @@ permissions:
 
 env:
   CI_MAINTAINERS: "johnjaysonlpz otheruser"
+  GO_COVERAGE_MIN: "100"
+  PY_COVERAGE_MIN: "100"
+  JAVA_COVERAGE_MIN_RATIO: "1.0"
 
 jobs:
   changes:
@@ -58,11 +61,12 @@ jobs:
         if: ${{ steps.tag.outputs.all != 'true' }}
         uses: dorny/paths-filter@v3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}
           filters: |
             ci:
               - '.github/workflows/**'
               - '.github/actions/**'
+              - '.bootstrap-local.sh'
               - '.ci-tool-versions.sh'
               - '.ci-local.sh'
             golang:
@@ -77,10 +81,9 @@ jobs:
               - 'python-django/**'
               - '**/Dockerfile'
               - '**/Dockerfile.*'
-              - 'docker-compose*.yml'
-              - 'docker-compose*.yaml'
               - '.github/workflows/**'
               - '.github/actions/**'
+              - '.bootstrap-local.sh'
               - '.ci-tool-versions.sh'
               - '.ci-local.sh'
 
@@ -134,65 +137,59 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Block PRs that modify CI control files (GitHub API)
+      - name: Policy - noop (non-PR)
+        if: ${{ github.event_name != 'pull_request' }}
+        run: echo "Policy check skipped (not a PR)."
+
+      - name: Checkout (PR)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Block PRs that modify CI control files (fork-safe; deterministic; fail-closed)
         if: ${{ github.event_name == 'pull_request' }}
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ACTOR: ${{ github.actor }}
+          MAINTAINERS: ${{ env.CI_MAINTAINERS }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -Eeuo pipefail
 
-          need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing $1" >&2; exit 2; }; }
-          need_env() { [[ -n "${!1:-}" ]] || { echo "ERROR: missing env $1" >&2; exit 2; }; }
-
-          need_cmd curl
-          need_cmd jq
-          need_env GH_TOKEN
-          need_env REPO
-          need_env PR_NUMBER
-
-          curl_json() {
-            local url="$1"
-            local attempt=1
-            local resp=""
-            while (( attempt <= 5 )); do
-              if resp="$(curl -fsSL \
-                -H "Authorization: Bearer ${GH_TOKEN}" \
-                -H "Accept: application/vnd.github+json" \
-                "$url")"; then
-                echo "$resp"
-                return 0
-              fi
-              sleep $((attempt * 2))
-              attempt=$((attempt + 1))
-            done
-            echo "ERROR: GitHub API request failed after retries: $url" >&2
-            exit 1
-          }
-
-          actor="${{ github.actor }}"
-          maintainers="${CI_MAINTAINERS:-}"
-          maintainers="$(echo "$maintainers" | tr '\n\t' '  ' | xargs)"
-
-          if echo " $maintainers " | grep -Fq " $actor "; then
-            echo "Maintainer bypass: $actor"
+          maintainers="$(echo "${MAINTAINERS:-}" | tr '\n\t' '  ' | xargs)"
+          if echo " $maintainers " | grep -Fq " ${ACTOR} "; then
+            echo "Maintainer bypass: ${ACTOR}"
             exit 0
           fi
 
-          protected_regex='^(\.bootstrap-local\.sh|\.ci-tool-versions\.sh|\.ci-local\.sh|\.github/workflows/|\.github/actions/)'
+          protected_regex='^(\.bootstrap-local\.sh$|\.ci-tool-versions\.sh$|\.ci-local\.sh$|\.github/workflows/|\.github/actions/)'
 
-          page=1
-          changed=""
-          while :; do
-            resp="$(curl_json "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100&page=${page}")"
-            files="$(echo "$resp" | jq -r '.[].filename')"
-            [[ -z "${files// }" ]] && break
-            changed+="${files}"$'\n'
-            [[ "$(echo "$resp" | jq 'length')" -lt 100 ]] && break
-            page=$((page+1))
-          done
+          base_sha="${BASE_SHA}"
+          head_sha="${HEAD_SHA}"
+
+          # Fetch exact commits (fork-safe: base repo can fetch these objects)
+          git fetch --no-tags --prune --depth=50 origin "${base_sha}" "${head_sha}" || {
+            echo "ERROR: unable to fetch base/head SHAs (fail-closed)." >&2
+            exit 2
+          }
+
+          git cat-file -e "${base_sha}^{commit}" || { echo "ERROR: base_sha not a commit (fail-closed)." >&2; exit 2; }
+          git cat-file -e "${head_sha}^{commit}" || { echo "ERROR: head_sha not a commit (fail-closed)." >&2; exit 2; }
+
+          echo "Diff range: ${base_sha}...${head_sha}"
+
+          changed="$(git diff --name-only "${base_sha}...${head_sha}")" || {
+            echo "ERROR: unable to compute diff (fail-closed)." >&2
+            exit 2
+          }
+
+          if [[ -z "${changed//[[:space:]]/}" ]]; then
+            echo "OK: no file changes detected."
+            exit 0
+          fi
 
           if echo "$changed" | grep -E "$protected_regex" >/dev/null; then
             echo "ERROR: This PR modifies protected CI control files:"
@@ -203,10 +200,6 @@ jobs:
           fi
 
           echo "OK: no protected CI control files modified."
-
-      - name: Policy - noop (non-PR)
-        if: ${{ github.event_name != 'pull_request' }}
-        run: echo "Policy check skipped (not a PR)."
 
   dependency_review:
     name: Security - dependency review (PR only)
@@ -225,94 +218,17 @@ jobs:
 
   trivy_repo:
     name: Security - Trivy (repo) + SARIF
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
     needs: [ policy ]
     permissions:
       contents: read
       security-events: write
-    env:
-      TRIVY_VERSION: ""
-      TRIVY_CACHE_EPOCH: ""
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Setup - load pinned tool versions
-        uses: ./.github/actions/load-tool-versions
-
-      - name: Validate - tool versions loaded
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          : "${TRIVY_VERSION:?TRIVY_VERSION is empty (load-tool-versions failed?)}"
-
-      - name: Compute - Trivy cache epoch (weekly)
-        shell: bash
-        run: echo "TRIVY_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
-
-      - name: Cache - Trivy DB/cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ github.workspace }}/.cache/trivy
-          key: trivy-${{ runner.os }}-${{ env.TRIVY_VERSION }}-${{ env.TRIVY_CACHE_EPOCH }}
-          restore-keys: |
-            trivy-${{ runner.os }}-${{ env.TRIVY_VERSION }}-
-
-      - name: Security - Trivy scan (fs) (table, gate HIGH/CRITICAL)
-        id: trivy_repo_table
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@0.33.1
-        with:
-          version: ${{ env.TRIVY_VERSION }}
-          cache-dir: ${{ github.workspace }}/.cache/trivy
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,misconfig,secret
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          format: table
-          output: trivy-repo.txt
-          exit-code: "1"
-          skip-dirs: .git,.cache
-
-      - name: Security - Trivy scan (fs) -> SARIF (for Code Scanning)
-        uses: aquasecurity/trivy-action@0.33.1
-        with:
-          version: ${{ env.TRIVY_VERSION }}
-          cache-dir: ${{ github.workspace }}/.cache/trivy
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,misconfig,secret
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          format: sarif
-          output: trivy-repo.sarif
-          exit-code: "0"
-          skip-dirs: .git,.cache
-
-      - name: Upload - SARIF to GitHub Code Scanning (repo)
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy-repo.sarif
-          category: trivy-repo
-
-      - name: Artifact - upload Trivy repo report (table)
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: trivy-repo
-          path: trivy-repo.txt
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Gate - fail if Trivy repo scan found HIGH/CRITICAL
-        if: steps.trivy_repo_table.outcome == 'failure'
-        shell: bash
-        run: exit 1
+    uses: ./.github/workflows/_trivy_repo.yaml
+    with:
+      upload_sarif: true
+      gate_on_findings: true
+      allow_fork_pr_sarif: false
+      artifact_name: trivy-repo-ci
+      sarif_category: trivy-repo-ci
 
   go:
     name: Go / Gin - quality, tests, security
@@ -423,18 +339,21 @@ jobs:
           go test ./... -race -shuffle=on -count=1 \
             -covermode=atomic -coverprofile=coverage.out
 
-      - name: Coverage - enforce 100% statements (Go)
+      - name: Coverage - enforce minimum statements (Go)
+        env:
+          GO_COVERAGE_MIN: ${{ env.GO_COVERAGE_MIN }}
         run: |
           python3 - <<'PY'
-          import re, subprocess, sys
+          import os, re, subprocess, sys
           out = subprocess.check_output(["go", "tool", "cover", "-func=coverage.out"], text=True)
           m = re.search(r"total:\s*\(statements\)\s*([\d.]+)%", out)
           if not m:
               print("Could not parse total coverage from go tool cover output.", file=sys.stderr)
               sys.exit(2)
           pct = float(m.group(1))
-          print(f"Go total coverage: {pct:.1f}%")
-          sys.exit(0 if pct >= 100.0 else 1)
+          min_pct = float(os.environ.get("GO_COVERAGE_MIN", "100"))
+          print(f"Go total coverage: {pct:.1f}% (min {min_pct:.1f}%)")
+          sys.exit(0 if pct >= min_pct else 1)
           PY
 
       - name: Artifact - upload coverage profile (coverage.out)
@@ -499,7 +418,7 @@ jobs:
           cache: maven
 
       - name: Build - verify (Spotless, SpotBugs, tests, JaCoCo)
-        run: mvn -B -ntp verify
+        run: mvn -B -ntp verify -Djacoco.min.ratio="${JAVA_COVERAGE_MIN_RATIO}"
 
       - name: Artifact - upload JaCoCo report directory
         uses: actions/upload-artifact@v6
@@ -643,12 +562,13 @@ jobs:
           . .venv-ci/bin/activate
           mypy app
 
-      - name: Test - unit tests + coverage (pytest, enforce 100%, write XML)
+      - name: Test - unit tests + coverage (pytest, enforce min, write XML)
         env:
           DJANGO_SETTINGS_MODULE: django_app.settings
+          PY_COVERAGE_MIN: ${{ env.PY_COVERAGE_MIN }}
         run: |
           . .venv-ci/bin/activate
-          pytest --cov --cov-report=xml --cov-fail-under=100
+          pytest --cov --cov-report=xml --cov-fail-under="${PY_COVERAGE_MIN}"
 
       - name: Artifact - upload coverage report (coverage.xml)
         uses: actions/upload-artifact@v6
@@ -690,6 +610,7 @@ jobs:
       TRIVY_VERSION: ""
       TRIVY_CACHE_EPOCH: ""
       TRIVY_GATE_FAILED: ""
+      TRIVY_GATE_ON_FINDINGS: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -779,7 +700,7 @@ jobs:
           sbom: true
           provenance: true
 
-      - name: Security - Trivy scan (image by digest) (table, gate HIGH/CRITICAL)
+      - name: Security - Trivy scan (image by digest) (table)
         id: trivy_img_table_release
         continue-on-error: true
         uses: aquasecurity/trivy-action@0.33.1
@@ -794,7 +715,7 @@ jobs:
           ignore-unfixed: true
           format: table
           output: trivy-image-${{ matrix.image }}.txt
-          exit-code: "1"
+          exit-code: ${{ env.TRIVY_GATE_ON_FINDINGS == 'true' && '1' || '0' }}
 
       - name: Trivy - scan image -> SARIF
         if: always()
@@ -817,13 +738,13 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-image-${{ matrix.image }}.sarif
-          category: trivy-image-${{ matrix.image }}
+          category: trivy-image-release-${{ matrix.image }}
 
       - name: Artifact - upload Trivy image report (table)
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: trivy-image-${{ matrix.image }}
+          name: trivy-image-release-${{ matrix.image }}
           path: trivy-image-${{ matrix.image }}.txt
           if-no-files-found: warn
           retention-days: 7
@@ -838,7 +759,7 @@ jobs:
           fi
 
       - name: Cleanup - remove temporary ci tag from Docker Hub (best-effort)
-        if: env.TRIVY_GATE_FAILED == 'true'
+        if: env.TRIVY_GATE_ON_FINDINGS == 'true' && env.TRIVY_GATE_FAILED == 'true'
         shell: bash
         env:
           DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -887,7 +808,7 @@ jobs:
           fi
 
       - name: Gate - fail if Trivy image scan found HIGH/CRITICAL
-        if: env.TRIVY_GATE_FAILED == 'true'
+        if: env.TRIVY_GATE_ON_FINDINGS == 'true' && env.TRIVY_GATE_FAILED == 'true'
         shell: bash
         run: exit 1
 
