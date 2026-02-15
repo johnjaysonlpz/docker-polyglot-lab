@@ -14,7 +14,6 @@ concurrency:
 permissions:
   contents: read
   pull-requests: read
-  security-events: write
 
 env:
   CI_MAINTAINERS: "johnjaysonlpz otheruser"
@@ -155,8 +154,8 @@ jobs:
         env:
           ACTOR: ${{ github.actor }}
           MAINTAINERS: ${{ env.CI_MAINTAINERS }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -Eeuo pipefail
 
@@ -166,33 +165,23 @@ jobs:
             exit 0
           fi
 
-          protected_regex='^(\.bootstrap-local\.sh|\.ci-tool-versions\.sh|\.ci-local\.sh|\.github/workflows/|\.github/actions/)'
+          protected_regex='^(\.bootstrap-local\.sh$|\.ci-tool-versions\.sh$|\.ci-local\.sh$|\.github/workflows/|\.github/actions/)'
 
-          # Fetch PR head in a fork-safe way from the base repo.
-          # GitHub exposes fork PR heads as refs/pull/<N>/head on the base repo.
-          git fetch --no-tags --depth=1 origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr/${PR_NUMBER}" || {
-            echo "ERROR: unable to fetch PR head ref (fail-closed)." >&2
+          base_sha="${BASE_SHA}"
+          head_sha="${HEAD_SHA}"
+
+          # Fetch exact commits (fork-safe: base repo can fetch these objects)
+          git fetch --no-tags --prune --depth=50 origin "${base_sha}" "${head_sha}" || {
+            echo "ERROR: unable to fetch base/head SHAs (fail-closed)." >&2
             exit 2
           }
 
-          head_ref="refs/remotes/origin/pr/${PR_NUMBER}"
-          git cat-file -e "${BASE_SHA}^{commit}" || {
-            echo "ERROR: BASE_SHA is not a commit (fail-closed)." >&2
-            exit 2
-          }
-          git show-ref --verify --quiet "${head_ref}" || {
-            echo "ERROR: PR head ref not found after fetch (fail-closed)." >&2
-            exit 2
-          }
+          git cat-file -e "${base_sha}^{commit}" || { echo "ERROR: base_sha not a commit (fail-closed)." >&2; exit 2; }
+          git cat-file -e "${head_sha}^{commit}" || { echo "ERROR: head_sha not a commit (fail-closed)." >&2; exit 2; }
 
-          merge_base="$(git merge-base "${BASE_SHA}" "${head_ref}")" || {
-            echo "ERROR: unable to compute merge-base (fail-closed)." >&2
-            exit 2
-          }
+          echo "Diff range: ${base_sha}...${head_sha}"
 
-          echo "Diff range: ${merge_base}..${head_ref}"
-
-          changed="$(git diff --name-only "${merge_base}..${head_ref}")" || {
+          changed="$(git diff --name-only "${base_sha}...${head_sha}")" || {
             echo "ERROR: unable to compute diff (fail-closed)." >&2
             exit 2
           }
@@ -230,6 +219,9 @@ jobs:
   trivy_repo:
     name: Security - Trivy (repo) + SARIF
     needs: [ policy ]
+    permissions:
+      contents: read
+      security-events: write
     uses: ./.github/workflows/_trivy_repo.yaml
     with:
       upload_sarif: true

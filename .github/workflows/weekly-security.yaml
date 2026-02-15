@@ -15,6 +15,9 @@ permissions:
 jobs:
   trivy_repo:
     name: Security - Trivy (repo) + SARIF
+    permissions:
+      contents: read
+      security-events: write
     uses: ./.github/workflows/_trivy_repo.yaml
     with:
       upload_sarif: true
