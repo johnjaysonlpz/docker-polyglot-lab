@@ -28,6 +28,9 @@ jobs:
 
   docker_weekly:
     name: Docker - Trivy image (weekly) - ${{ matrix.service_name }}
+    permissions:
+      contents: read
+      security-events: write
     uses: ./.github/workflows/_trivy_image.yaml
     strategy:
       fail-fast: false
