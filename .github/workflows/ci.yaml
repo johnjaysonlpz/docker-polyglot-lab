@@ -146,7 +146,7 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         uses: actions/checkout@v6
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Block PRs that modify CI control files (fork-safe; deterministic; fail-closed)
@@ -185,7 +185,14 @@ jobs:
             exit 2
           }
 
-          changed="$(git diff --name-only "${BASE_SHA}..${head_ref}")" || {
+          merge_base="$(git merge-base "${BASE_SHA}" "${head_ref}")" || {
+            echo "ERROR: unable to compute merge-base (fail-closed)." >&2
+            exit 2
+          }
+
+          echo "Diff range: ${merge_base}..${head_ref}"
+
+          changed="$(git diff --name-only "${merge_base}..${head_ref}")" || {
             echo "ERROR: unable to compute diff (fail-closed)." >&2
             exit 2
           }
