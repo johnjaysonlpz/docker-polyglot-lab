@@ -610,6 +610,7 @@ jobs:
       TRIVY_VERSION: ""
       TRIVY_CACHE_EPOCH: ""
       TRIVY_GATE_FAILED: ""
+      TRIVY_GATE_ON_FINDINGS: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -714,7 +715,7 @@ jobs:
           ignore-unfixed: true
           format: table
           output: trivy-image-${{ matrix.image }}.txt
-          exit-code: "1"
+          exit-code: ${{ env.TRIVY_GATE_ON_FINDINGS == 'true' && '1' || '0' }}
 
       - name: Trivy - scan image -> SARIF
         if: always()
@@ -758,7 +759,7 @@ jobs:
           fi
 
       - name: Cleanup - remove temporary ci tag from Docker Hub (best-effort)
-        if: env.TRIVY_GATE_FAILED == 'true'
+        if: env.TRIVY_GATE_ON_FINDINGS == 'true' && env.TRIVY_GATE_FAILED == 'true'
         shell: bash
         env:
           DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -807,7 +808,7 @@ jobs:
           fi
 
       - name: Gate - fail if Trivy image scan found HIGH/CRITICAL
-        if: env.TRIVY_GATE_FAILED == 'true'
+        if: env.TRIVY_GATE_ON_FINDINGS == 'true' && env.TRIVY_GATE_FAILED == 'true'
         shell: bash
         run: exit 1
 
