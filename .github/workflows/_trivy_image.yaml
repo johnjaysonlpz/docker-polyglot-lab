@@ -109,7 +109,7 @@ jobs:
 
       - name: Security - Trivy scan (image) (table)
         id: trivy_img_table
-        continue-on-error: ${{ !inputs.gate_on_findings }}
+        continue-on-error: ${{ inputs.gate_on_findings }}
         uses: aquasecurity/trivy-action@0.33.1
         with:
           version: ${{ env.TRIVY_VERSION }}

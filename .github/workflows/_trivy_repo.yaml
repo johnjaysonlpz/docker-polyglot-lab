@@ -64,7 +64,7 @@ jobs:
 
       - name: Security - Trivy scan (fs) (table)
         id: trivy_repo_table
-        continue-on-error: ${{ !inputs.gate_on_findings }}
+        continue-on-error: ${{ inputs.gate_on_findings }}
         uses: aquasecurity/trivy-action@0.33.1
         with:
           version: ${{ env.TRIVY_VERSION }}
@@ -80,7 +80,7 @@ jobs:
           skip-dirs: .git,.cache
 
       - name: Security - Trivy scan (fs) -> SARIF
-        if: ${{ inputs.upload_sarif }}
+        if: ${{ inputs.upload_sarif && always() }}
         uses: aquasecurity/trivy-action@0.33.1
         with:
           version: ${{ env.TRIVY_VERSION }}
@@ -99,6 +99,7 @@ jobs:
         if: >-
           ${{
             inputs.upload_sarif &&
+            always() &&
             (
               github.event_name != 'pull_request' ||
               inputs.allow_fork_pr_sarif ||
