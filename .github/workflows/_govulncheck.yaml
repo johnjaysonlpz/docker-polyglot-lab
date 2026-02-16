@@ -20,16 +20,17 @@ permissions:
 jobs:
   govulncheck:
     name: Security - govulncheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
+        shell: bash
     env:
       GOVULNCHECK_VERSION: ""
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
         with:
           persist-credentials: false
 
@@ -37,14 +38,13 @@ jobs:
         uses: ./.github/actions/load-tool-versions
 
       - name: Validate - tool versions loaded
-        shell: bash
         run: |
           set -Eeuo pipefail
           : "${GOVULNCHECK_VERSION:?GOVULNCHECK_VERSION is empty}"
 
       - name: Setup - Go toolchain
         id: go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version-file: ${{ inputs.working_directory }}/go.mod
           cache-dependency-path: ${{ inputs.working_directory }}/go.sum
@@ -52,7 +52,7 @@ jobs:
 
       - name: Cache - Go tools (govulncheck)
         id: cache_go_tools
-        uses: actions/cache@v5
+        uses: actions/cache@a7833574556fa59680c1b7cb190c1735db73ebf0 # v5.0.0
         with:
           path: |
             ~/go/bin
@@ -60,12 +60,13 @@ jobs:
 
       - name: Setup - install govulncheck (cache miss)
         if: steps.cache_go_tools.outputs.cache-hit != 'true'
-        shell: bash
-        run: go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+        run: |
+          set -Eeuo pipefail
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
 
       - name: Setup - add Go tools to PATH
-        shell: bash
         run: |
+          set -Eeuo pipefail
           GOBIN="$(go env GOBIN)"
           if [[ -z "$GOBIN" ]]; then
             GOPATH_FIRST="$(go env GOPATH)"
@@ -77,15 +78,14 @@ jobs:
 
       - name: Security - govulncheck (with tests)
         id: govuln
-        continue-on-error: ${{ !inputs.gate }}
-        shell: bash
+        continue-on-error: true
         run: |
-          set -o pipefail
+          set -Eeuo pipefail
           govulncheck -test ./... | tee govulncheck.txt
 
       - name: Artifact - upload govulncheck report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ${{ inputs.artifact_name }}
           path: ${{ inputs.working_directory }}/govulncheck.txt
@@ -94,5 +94,6 @@ jobs:
 
       - name: Gate - fail if govulncheck found issues
         if: ${{ inputs.gate && steps.govuln.outcome == 'failure' }}
-        shell: bash
-        run: exit 1
+        run: |
+          set -Eeuo pipefail
+          exit 1

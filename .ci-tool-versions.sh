@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 
-# This file is sourced by CI/local scripts. Do not execute.
+# This file is parsed by CI and may also be sourced; keep it KEY=value only.
 
 # Go + Gin CI
 GOIMPORTS_VERSION=v0.41.0
