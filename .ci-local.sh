@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------------------------
-# .ci-local.sh
-# Runs a fixed set of checks that mirror CI intent, without CI event emulation.
+# .ci-local.sh - runs a fixed set of checks that mirror CI workflow intent
 # ------------------------------------------------------------------------------
 
 set -Eeuo pipefail
@@ -947,6 +946,11 @@ run_python() {
     say "Validate - requirements.lock matches requirements.txt"
     pip-compile --no-strip-extras --generate-hashes --output-file=requirements.lock requirements.txt
     git diff --exit-code -- requirements.lock
+
+    say "Validate - requirements.test.lock matches requirements.test.txt"
+    test -f requirements.test.txt
+    pip-compile --no-strip-extras --generate-hashes --output-file=requirements.test.lock requirements.test.txt
+    git diff --exit-code -- requirements.test.lock
 
     say "Install - runtime + test dependencies (locked)"
     python -m pip install -U "pip<${PIP_MAX_VERSION}"
