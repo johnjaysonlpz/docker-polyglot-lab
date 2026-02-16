@@ -27,17 +27,20 @@ permissions:
 jobs:
   trivy_repo:
     name: Security - Trivy (repo) + SARIF
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
       security-events: write
+    defaults:
+      run:
+        shell: bash
     env:
       TRIVY_VERSION: ""
       TRIVY_CACHE_EPOCH: ""
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
         with:
           persist-credentials: false
 
@@ -45,17 +48,17 @@ jobs:
         uses: ./.github/actions/load-tool-versions
 
       - name: Validate - tool versions loaded
-        shell: bash
         run: |
           set -Eeuo pipefail
           : "${TRIVY_VERSION:?TRIVY_VERSION is empty (load-tool-versions failed?)}"
 
       - name: Compute - Trivy cache epoch (weekly)
-        shell: bash
-        run: echo "TRIVY_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
+        run: |
+          set -Eeuo pipefail
+          echo "TRIVY_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
 
       - name: Cache - Trivy DB/cache
-        uses: actions/cache@v5
+        uses: actions/cache@a7833574556fa59680c1b7cb190c1735db73ebf0 # v5.0.0
         with:
           path: ${{ github.workspace }}/.cache/trivy
           key: trivy-${{ runner.os }}-${{ env.TRIVY_VERSION }}-${{ env.TRIVY_CACHE_EPOCH }}
@@ -65,7 +68,7 @@ jobs:
       - name: Security - Trivy scan (fs) (table)
         id: trivy_repo_table
         continue-on-error: true
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284 # v0.34.0
         with:
           version: ${{ env.TRIVY_VERSION }}
           cache-dir: ${{ github.workspace }}/.cache/trivy
@@ -81,7 +84,7 @@ jobs:
 
       - name: Security - Trivy scan (fs) -> SARIF
         if: ${{ inputs.upload_sarif && always() }}
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284 # v0.34.0
         with:
           version: ${{ env.TRIVY_VERSION }}
           cache-dir: ${{ github.workspace }}/.cache/trivy
@@ -106,14 +109,14 @@ jobs:
               github.event.pull_request.head.repo.full_name == github.repository
             )
           }}
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@9e907b5e64f6b83e7804b09294d44122997950d6 # v4
         with:
           sarif_file: trivy-repo.sarif
           category: ${{ inputs.sarif_category }}
 
       - name: Artifact - upload Trivy repo report (table)
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ${{ inputs.artifact_name }}
           path: trivy-repo.txt
@@ -122,5 +125,6 @@ jobs:
 
       - name: Gate - fail if Trivy repo scan found HIGH/CRITICAL
         if: ${{ inputs.gate_on_findings && steps.trivy_repo_table.outcome == 'failure' }}
-        shell: bash
-        run: exit 1
+        run: |
+          set -Eeuo pipefail
+          exit 1

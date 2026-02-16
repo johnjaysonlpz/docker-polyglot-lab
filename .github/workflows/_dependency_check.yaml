@@ -23,11 +23,12 @@ permissions:
 jobs:
   dependency_check:
     name: Security - OWASP Dependency-Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
+        shell: bash
     env:
       DEPENDENCY_CHECK_MAVEN_VERSION: ""
       DEPENDENCY_CHECK_FAIL_CVSS: ""
@@ -35,7 +36,7 @@ jobs:
       ODC_CACHE_EPOCH: "unset"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
         with:
           persist-credentials: false
 
@@ -43,25 +44,25 @@ jobs:
         uses: ./.github/actions/load-tool-versions
 
       - name: Validate - tool versions loaded
-        shell: bash
         run: |
           set -Eeuo pipefail
           : "${DEPENDENCY_CHECK_MAVEN_VERSION:?DEPENDENCY_CHECK_MAVEN_VERSION is empty}"
           : "${DEPENDENCY_CHECK_FAIL_CVSS:?DEPENDENCY_CHECK_FAIL_CVSS is empty}"
 
       - name: Setup - JDK 25 (Temurin)
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
         with:
           distribution: temurin
           java-version: "25"
           cache: maven
 
       - name: Compute cache epoch (weekly)
-        shell: bash
-        run: echo "ODC_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
+        run: |
+          set -Eeuo pipefail
+          echo "ODC_CACHE_EPOCH=$(date -u +%G-%V)" >> "$GITHUB_ENV"
 
       - name: Cache - OWASP Dependency-Check data
-        uses: actions/cache@v5
+        uses: actions/cache@a7833574556fa59680c1b7cb190c1735db73ebf0 # v5.0.0
         with:
           path: ${{ env.ODC_DATA_DIR }}
           key: dependency-check-${{ runner.os }}-${{ env.DEPENDENCY_CHECK_MAVEN_VERSION }}-${{ env.ODC_CACHE_EPOCH }}
@@ -70,10 +71,11 @@ jobs:
 
       - name: Security - OWASP Dependency-Check scan
         id: depcheck
-        continue-on-error: ${{ !inputs.gate }}
+        continue-on-error: true
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
+          set -Eeuo pipefail
           mvn -B -ntp org.owasp:dependency-check-maven:${DEPENDENCY_CHECK_MAVEN_VERSION}:check \
             -DfailBuildOnCVSS=${DEPENDENCY_CHECK_FAIL_CVSS} \
             -Dformats=HTML,JSON \
@@ -82,7 +84,7 @@ jobs:
 
       - name: Artifact - upload Dependency-Check reports
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ${{ inputs.artifact_name }}
           path: |
@@ -93,5 +95,6 @@ jobs:
 
       - name: Gate - fail if Dependency-Check found issues
         if: ${{ inputs.gate && steps.depcheck.outcome == 'failure' }}
-        shell: bash
-        run: exit 1
+        run: |
+          set -Eeuo pipefail
+          exit 1

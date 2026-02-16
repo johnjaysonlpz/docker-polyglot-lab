@@ -20,17 +20,18 @@ permissions:
 jobs:
   pip_audit:
     name: Security - pip-audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
+        shell: bash
     env:
       PIP_AUDIT_VERSION: ""
       PIP_MAX_VERSION: ""
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
         with:
           persist-credentials: false
 
@@ -38,7 +39,6 @@ jobs:
         uses: ./.github/actions/load-tool-versions
 
       - name: Validate - tool versions loaded
-        shell: bash
         run: |
           set -Eeuo pipefail
           : "${PIP_AUDIT_VERSION:?PIP_AUDIT_VERSION is empty}"
@@ -46,7 +46,7 @@ jobs:
           test -f requirements.lock
 
       - name: Setup - Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -54,8 +54,8 @@ jobs:
             ${{ inputs.working_directory }}/requirements.lock
 
       - name: Setup - venv + install pip-audit
-        shell: bash
         run: |
+          set -Eeuo pipefail
           python -m venv .venv-audit
           . .venv-audit/bin/activate
           python -m pip install -U "pip<${PIP_MAX_VERSION}"
@@ -63,16 +63,16 @@ jobs:
 
       - name: Security - pip-audit (locked deps)
         id: audit
-        continue-on-error: ${{ !inputs.gate }}
-        shell: bash
+        continue-on-error: true
         run: |
+          set -Eeuo pipefail
           . .venv-audit/bin/activate
           pip-audit -r requirements.lock --format=json --output=pip-audit.json
           pip-audit -r requirements.lock
 
       - name: Artifact - upload pip-audit report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ${{ inputs.artifact_name }}
           path: ${{ inputs.working_directory }}/pip-audit.json
@@ -81,5 +81,6 @@ jobs:
 
       - name: Gate - fail if pip-audit found issues
         if: ${{ inputs.gate && steps.audit.outcome == 'failure' }}
-        shell: bash
-        run: exit 1
+        run: |
+          set -Eeuo pipefail
+          exit 1
