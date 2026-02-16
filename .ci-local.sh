@@ -230,7 +230,79 @@ trap 'on_err "$?" "$LINENO" "${BASH_COMMAND:-}" "${FUNCNAME[0]:-main}"' ERR
 
 VERSIONS_FILE="${ROOT_DIR}/.ci-tool-versions.sh"
 ensure_file "$VERSIONS_FILE"
-source "$VERSIONS_FILE"
+ 
+load_tool_versions() {
+   local file="$1"
+ 
+   local allowed_keys_re='^(TRIVY_VERSION|GOIMPORTS_VERSION|GOVULNCHECK_VERSION|GOLANGCI_LINT_VERSION|GO_MODULE|DEPENDENCY_CHECK_MAVEN_VERSION|DEPENDENCY_CHECK_FAIL_CVSS|PIP_AUDIT_VERSION|PIP_TOOLS_VERSION|PIP_MAX_VERSION)$'
+   local base_value_re='[A-Za-z0-9][A-Za-z0-9._+/:@-]*'
+ 
+   local unquoted_line_re="^([A-Z][A-Z0-9_]*)=(${base_value_re})$"
+   local quoted_line_re="^([A-Z][A-Z0-9_]*)=\"(${base_value_re})\"$"
+ 
+   local semverish_re='^v?[0-9]+(\.[0-9]+){0,3}([.-][0-9A-Za-z][0-9A-Za-z.-]*)?(\+[0-9A-Za-z][0-9A-Za-z.-]*)?$'
+   local numeric_version_re='^[0-9]+(\.[0-9]+){0,3}$'
+   local cvss_re='^(10(\.0)?|[0-9](\.[0-9])?)$'
+   local go_module_re='^[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+$'
+ 
+   declare -A key_value_re=(
+     ["TRIVY_VERSION"]="$semverish_re"
+     ["GOIMPORTS_VERSION"]="$semverish_re"
+     ["GOVULNCHECK_VERSION"]="$semverish_re"
+     ["GOLANGCI_LINT_VERSION"]="$semverish_re"
+     ["DEPENDENCY_CHECK_MAVEN_VERSION"]="$semverish_re"
+     ["PIP_AUDIT_VERSION"]="$semverish_re"
+     ["PIP_TOOLS_VERSION"]="$semverish_re"
+     ["PIP_MAX_VERSION"]="$numeric_version_re"
+     ["DEPENDENCY_CHECK_FAIL_CVSS"]="$cvss_re"
+     ["GO_MODULE"]="$go_module_re"
+   )
+ 
+   _trim_ws() {
+     local s="$1"
+     s="${s#"${s%%[![:space:]]*}"}"
+     s="${s%"${s##*[![:space:]]}"}"
+     printf '%s' "$s"
+   }
+ 
+   while IFS= read -r raw || [[ -n "$raw" ]]; do
+     local line key value expected_re
+     line="${raw%$'\r'}"
+     line="$(_trim_ws "$line")"
+ 
+     [[ -z "$line" ]] && continue
+     [[ "$line" =~ ^# ]] && continue
+ 
+     key=""
+     value=""
+ 
+     if [[ "$line" =~ $unquoted_line_re ]]; then
+       key="${BASH_REMATCH[1]}"
+       value="${BASH_REMATCH[2]}"
+     elif [[ "$line" =~ $quoted_line_re ]]; then
+       key="${BASH_REMATCH[1]}"
+       value="${BASH_REMATCH[2]}"
+     else
+       die "invalid line in ${file}: must be KEY=value or KEY=\"value\"; no spaces; KEY=[A-Z][A-Z0-9_]*; value charset=${base_value_re}" 2
+     fi
+ 
+     if [[ ! "$key" =~ $allowed_keys_re ]]; then
+       die "disallowed key in ${file}: ${key} (allowed: ${allowed_keys_re})" 2
+     fi
+ 
+     expected_re="${key_value_re[$key]:-}"
+     [[ -n "$expected_re" ]] || die "internal config missing per-key validator for: ${key}" 2
+ 
+     if [[ ! "$value" =~ $expected_re ]]; then
+       die "invalid value for ${key} in ${file} (expected: ${expected_re}; got: ${value})" 2
+     fi
+ 
+     printf -v "$key" '%s' "$value"
+     export "$key"
+   done < "$file"
+ }
+ 
+ load_tool_versions "$VERSIONS_FILE"
 
 # ------------------------------------------------------------------------------
 # Net helpers
@@ -373,7 +445,6 @@ doctor_check_go() {
   doctor_require_env GOIMPORTS_VERSION || issues=$((issues+1))
   doctor_require_env GOVULNCHECK_VERSION || issues=$((issues+1))
   doctor_require_env GOLANGCI_LINT_VERSION || issues=$((issues+1))
-  doctor_require_env GO_MODULE || issues=$((issues+1))
 
   doctor_need_cmd go || issues=$((issues+1))
   doctor_need_cmd curl || issues=$((issues+1))
@@ -414,6 +485,7 @@ doctor_check_python() {
   doctor_require_file "${ROOT_DIR}/python-django/requirements.txt" || issues=$((issues+1))
   doctor_require_file "${ROOT_DIR}/python-django/requirements.test.txt" || issues=$((issues+1))
   doctor_require_file "${ROOT_DIR}/python-django/requirements.lock" || issues=$((issues+1))
+  doctor_require_file "${ROOT_DIR}/python-django/requirements.test.lock" || issues=$((issues+1))
   doctor_require_dir "${ROOT_DIR}/python-django/app" || issues=$((issues+1))
 
   doctor_require_env PIP_MAX_VERSION || issues=$((issues+1))
@@ -426,6 +498,7 @@ doctor_check_python() {
     "${ROOT_DIR}/python-django/requirements.txt" \
     "${ROOT_DIR}/python-django/requirements.test.txt" \
     "${ROOT_DIR}/python-django/requirements.lock" \
+    "${ROOT_DIR}/python-django/requirements.test.lock" \
     >/dev/null || issues=$((issues+1))
 
   printf "%s\n" "$issues"
@@ -602,7 +675,6 @@ run_go() {
   require_env GOIMPORTS_VERSION
   require_env GOVULNCHECK_VERSION
   require_env GOLANGCI_LINT_VERSION
-  require_env GO_MODULE
 
   need_cmd go
 
@@ -635,7 +707,11 @@ run_go() {
       done <<<"$go_dirs" | grep -q . && exit 1
 
       while IFS= read -r d; do
-        goimports -l -local "${GO_MODULE}" "$d"
+        if [[ -n "${GO_MODULE:-}" ]]; then
+          goimports -l -local "${GO_MODULE}" "$d"
+        else
+          goimports -l "$d"
+        fi
       done <<<"$go_dirs" | grep -q . && exit 1
     fi
 
@@ -875,7 +951,7 @@ run_python() {
     say "Install - runtime + test dependencies (locked)"
     python -m pip install -U "pip<${PIP_MAX_VERSION}"
     python -m pip install --require-hashes -r requirements.lock
-    python -m pip install -r requirements.test.txt
+    python -m pip install --require-hashes -r requirements.test.lock
 
     need_cmd ruff
     need_cmd mypy
